@@ -1,0 +1,3795 @@
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import {
+  UserCheck,
+  Database,
+  Shirt,
+  Sparkles,
+  Users,
+  Bookmark,
+  CheckSquare,
+  Plus,
+  ArrowRight,
+  HandMetal,
+  SlidersHorizontal,
+  ChevronUp,
+  ChevronDown,
+  Wand2,
+  RefreshCw,
+  Inbox,
+  X,
+  ExternalLink,
+  Camera,
+  Link2,
+  Grid,
+  Send,
+  Download,
+  Upload,
+  Cloud,
+  Copy,
+  Trash2,
+  CheckCircle2,
+} from 'lucide-react';
+
+type CategoryType = '아우터' | '상의' | '하의' | '신발' | '악세사리';
+type ClothStatus = '보유 중' | '구매 예정';
+type MainTab = 'wardrobe' | 'stylist' | 'community' | 'saved';
+type ProfileSubTab = 'closet' | 'style' | 'inbox';
+
+interface ClothItem {
+  id: number;
+  name: string;
+  category: CategoryType;
+  season: string;
+  status: ClothStatus;
+  sourceUrl?: string;
+  image: string;
+}
+
+interface Proposal {
+  id: string;
+  proposer: string;
+  note: string;
+  itemIds: number[];
+  likes: number;
+  createdAt: string;
+}
+
+interface CommunityUser {
+  id: string;
+  handle: string;
+  badge: string;
+  dna: string[];
+  request: string;
+  closet: ClothItem[];
+  proposals: Proposal[];
+}
+
+interface SavedLook {
+  id: number;
+  genre: string;
+  mode: 'DAY' | 'NIGHT';
+  title: string;
+  items: ClothItem[];
+  note: string;
+}
+
+interface Article {
+  id: string;
+  tag: string;
+  headline: string;
+  summary: string;
+  keyItems: string[];
+  searchQuery: string;
+}
+
+interface UrlPreviewData {
+  url: string;
+  store: string;
+  name: string;
+  price: string;
+  category: CategoryType;
+  season: string;
+  image: string;
+}
+
+interface MissingSuggestion {
+  name: string;
+  reason: string;
+  tag?: string;
+}
+
+interface StylistResult {
+  id: number;
+  genreTag: string;
+  apiBadge: string;
+  title: string;
+  note: string;
+  items: ClothItem[];
+  suggestions: MissingSuggestion[];
+  filterSummary: string;
+  mode: 'DAY' | 'NIGHT';
+  genre: string;
+}
+
+interface ApiConfig {
+  geminiKey: string;
+  fashnKey: string;
+  supabaseUrl: string;
+  supabaseKey: string;
+}
+
+interface ToastItem {
+  id: number;
+  message: string;
+}
+
+const STORAGE_KEYS = {
+  WARDROBE: 'aurafit_touch_wardrobe_v4',
+  SAVED_LOOKS: 'aurafit_touch_saved_v4',
+  COMMUNITY: 'aurafit_touch_community_v4',
+  SELECTED_IDS: 'aurafit_touch_selected_v4',
+  THEME: 'aurafit_touch_theme_v4',
+  CONFIG: 'aurafit_touch_api_cfg_v4',
+};
+
+const createSvgItem = (
+  bgColor: string,
+  iconEmoji: string,
+  label: string,
+  subLabel = ''
+): string => {
+  const isDarkBg = ['#18181B', '#27272A', '#3F3F46'].includes(
+    bgColor.toUpperCase()
+  );
+  const titleFill = isDarkBg ? '#F4F4F5' : '#27272A';
+  const subFill = isDarkBg ? '#A1A1AA' : '#71717A';
+  const circleOpacity = isDarkBg ? '0.12' : '0.45';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="450" viewBox="0 0 400 450">
+    <rect width="400" height="450" rx="24" fill="${bgColor}"/>
+    <circle cx="200" cy="195" r="105" fill="#ffffff" fill-opacity="${circleOpacity}"/>
+    <text x="50%" y="45%" dominant-baseline="middle" text-anchor="middle" font-size="112">${iconEmoji}</text>
+    <text x="50%" y="76%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="bold" fill="${titleFill}">${label}</text>
+    <text x="50%" y="83%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="600" fill="${subFill}">${subLabel}</text>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+};
+
+const defaultWardrobe: ClothItem[] = [
+  {
+    id: 101,
+    name: '오버핏 헤비웨이트 화이트 티셔츠',
+    category: '상의',
+    season: '사계절',
+    status: '보유 중',
+    sourceUrl: '',
+    image: createSvgItem('#F4F4F5', '👕', 'HEAVY WHITE TEE', 'TOP · COTTON'),
+  },
+  {
+    id: 102,
+    name: '다크 인디고 와이드 셀비지 데님',
+    category: '하의',
+    season: '사계절',
+    status: '보유 중',
+    sourceUrl: '',
+    image: createSvgItem('#E4E4E7', '👖', 'WIDE SELVEDGE', 'BOTTOM · DENIM'),
+  },
+  {
+    id: 103,
+    name: '구조적 숄더 블랙 싱글 블레이저',
+    category: '아우터',
+    season: '봄/가을',
+    status: '보유 중',
+    sourceUrl: '',
+    image: createSvgItem('#D4D4D8', '🧥', 'STRUCTURED BLAZER', 'OUTER · TAILORED'),
+  },
+  {
+    id: 104,
+    name: '빈티지 카키 개버딘 트렌치코트',
+    category: '아우터',
+    season: '봄/가을',
+    status: '보유 중',
+    sourceUrl: '',
+    image: createSvgItem('#E7E5E4', '🧥', 'TRENCH COAT', 'OUTER · GABARDINE'),
+  },
+  {
+    id: 105,
+    name: '청키 솔 블랙 레더 더비 로퍼',
+    category: '신발',
+    season: '사계절',
+    status: '보유 중',
+    sourceUrl: '',
+    image: createSvgItem('#F4F4F5', '👞', 'CHUNKY DERBY', 'SHOES · LEATHER'),
+  },
+  {
+    id: 106,
+    name: '925 실버 볼 체인 네크리스',
+    category: '악세사리',
+    season: '사계절',
+    status: '보유 중',
+    sourceUrl: '',
+    image: createSvgItem('#E4E4E7', '⛓️', '925 SILVER CHAIN', 'ACC · HARDWARE'),
+  },
+];
+
+const defaultCommunityUsers: CommunityUser[] = [
+  {
+    id: 'me',
+    handle: '@my_aurafit_closet',
+    badge: '나의 오픈 옷장',
+    dna: ['Editorial Minimal', 'Subculture Mix', 'KREAM Digging'],
+    request:
+      '제 옷장에 있는 아이템들을 터치해서 출근룩이나 주말 전시회 코디 자유롭게 조합해 주세요!',
+    closet: [],
+    proposals: [
+      {
+        id: 'p_init_1',
+        proposer: '@seoul_archive',
+        note: '구조적 블랙 블레이저 안에 화이트 티셔츠를 받쳐 입고, 셀비지 데님과 실버 체인을 매치하면 실패 없는 한남동 에디토리얼 룩입니다!',
+        itemIds: [103, 101, 102, 106],
+        likes: 5,
+        createdAt: '방금 전',
+      },
+      {
+        id: 'p_init_2',
+        proposer: '@abyss_punk',
+        note: '다크모드 감성으로 블레이저에 청키 더비 로퍼, 실버 볼 체인을 과감하게 레이어드해 보세요.',
+        itemIds: [103, 105, 106],
+        likes: 3,
+        createdAt: '1시간 전',
+      },
+    ],
+  },
+  {
+    id: 'u1',
+    handle: '@seoul_archive',
+    badge: '에디토리얼 러버',
+    dna: ['Maison Margiela', 'Minimal Tailoring', 'Old Money'],
+    request:
+      '이번 주말 한남동 전시회 가는데, 제 옷장에 있는 블랙 블레이저랑 와이드 팬츠로 너무 딱딱하지 않은 핀터레스트 감성 코디 짜주실 분!',
+    closet: [
+      {
+        id: 201,
+        name: '오버핏 울 블랙 블레이저',
+        category: '아우터',
+        season: '봄/가을',
+        status: '보유 중',
+        image: createSvgItem('#E4E4E7', '🧥', 'WOOL BLAZER', 'OUTER'),
+      },
+      {
+        id: 202,
+        name: '크림 코튼 투턱 와이드 팬츠',
+        category: '하의',
+        season: '사계절',
+        status: '보유 중',
+        image: createSvgItem('#F4F4F5', '👖', 'CREAM PANTS', 'BOTTOM'),
+      },
+      {
+        id: 203,
+        name: '블루 스트라이프 옥스포드 셔츠',
+        category: '상의',
+        season: '사계절',
+        status: '보유 중',
+        image: createSvgItem('#E0F2FE', '👔', 'STRIPE SHIRT', 'TOP'),
+      },
+      {
+        id: 204,
+        name: '빈티지 레더 크로스 메신저백',
+        category: '악세사리',
+        season: '사계절',
+        status: '보유 중',
+        image: createSvgItem('#D4D4D8', '👜', 'LEATHER BAG', 'ACC'),
+      },
+      {
+        id: 205,
+        name: '스퀘어토 블랙 첼시 부츠',
+        category: '신발',
+        season: '사계절',
+        status: '구매 예정',
+        image: createSvgItem('#E4E4E7', '🥾', 'CHELSEA BOOTS', 'WISHLIST'),
+      },
+    ],
+    proposals: [
+      {
+        id: 'p_u1_1',
+        proposer: '@cityboy_kim',
+        note: '스트라이프 셔츠 단추를 하나 풀고 크림 와이드 팬츠에 블레이저를 툭 걸치면 핀터레스트 감성 제대로입니다.',
+        itemIds: [201, 203, 202],
+        likes: 7,
+        createdAt: '2시간 전',
+      },
+    ],
+  },
+  {
+    id: 'u2',
+    handle: '@abyss_punk',
+    badge: '다크 서브컬처',
+    dna: ['Rick Owens Archive', 'Neo Punk & Goth', 'Silver Hardware'],
+    request:
+      '평소 입는 디스트로이드 카고 팬츠에 펑크나 고스 느낌 제대로 내고 싶습니다. 제 옷장 아이템 조합이랑 필요한 악세사리 조언 부탁해요!',
+    closet: [
+      {
+        id: 301,
+        name: '디스트로이드 블랙 멀티 카고팬츠',
+        category: '하의',
+        season: '사계절',
+        status: '보유 중',
+        image: createSvgItem('#27272A', '👖', 'CARGO PANTS', 'DARK WEAR'),
+      },
+      {
+        id: 302,
+        name: '빈티지 메탈 밴드 워싱 롱슬리브',
+        category: '상의',
+        season: '사계절',
+        status: '보유 중',
+        image: createSvgItem('#3F3F46', '👕', 'BAND LONGSLEEVE', 'VINTAGE'),
+      },
+      {
+        id: 303,
+        name: '헤비 스터드 크롭 바이커 레더 자켓',
+        category: '아우터',
+        season: '봄/가을',
+        status: '보유 중',
+        image: createSvgItem('#18181B', '🧥', 'BIKER JACKET', 'LEATHER'),
+      },
+      {
+        id: 304,
+        name: '릭 오웬스 스타일 청키 플랫폼 부츠',
+        category: '신발',
+        season: '사계절',
+        status: '보유 중',
+        image: createSvgItem('#27272A', '🥾', 'PLATFORM BOOTS', 'CHUNKY'),
+      },
+      {
+        id: 305,
+        name: '고딕 크로스 실버 월렛 체인',
+        category: '악세사리',
+        season: '사계절',
+        status: '구매 예정',
+        image: createSvgItem('#3F3F46', '⛓️', 'WALLET CHAIN', 'WISHLIST'),
+      },
+    ],
+    proposals: [],
+  },
+  {
+    id: 'u3',
+    handle: '@cityboy_kim',
+    badge: '아메카지 & 시티보이',
+    dna: ['City Boy', 'Workwear', 'Vintage Denim'],
+    request:
+      '출근룩이랑 주말 데이트룩 겸용으로 입을 수 있게 코디 조합 좀 만들어 주세요. 옷은 몇 벌 없는데 활용법이 궁금해요.',
+    closet: [
+      {
+        id: 401,
+        name: '네이비 코튼 트윌 워크 자켓',
+        category: '아우터',
+        season: '봄/가을',
+        status: '보유 중',
+        image: createSvgItem('#E2E8F0', '🧥', 'WORK JACKET', 'OUTER'),
+      },
+      {
+        id: 402,
+        name: '베이지 와이드 투턱 치노팬츠',
+        category: '하의',
+        season: '사계절',
+        status: '보유 중',
+        image: createSvgItem('#FEF3C7', '👖', 'CHINO PANTS', 'BOTTOM'),
+      },
+      {
+        id: 403,
+        name: '멜란지 그레이 헤비웨이트 후드티',
+        category: '상의',
+        season: '봄/가을',
+        status: '보유 중',
+        image: createSvgItem('#E4E4E7', '👕', 'GRAY HOODIE', 'TOP'),
+      },
+      {
+        id: 404,
+        name: '스웨이드 메이플 클락스 왈라비',
+        category: '신발',
+        season: '사계절',
+        status: '보유 중',
+        image: createSvgItem('#FDE68A', '👞', 'WALLABEE', 'SHOES'),
+      },
+    ],
+    proposals: [],
+  },
+];
+
+const lightArticles: Article[] = [
+  {
+    id: 'l1',
+    tag: 'RUNWAY BRIEFING',
+    headline: '릭 오웬스 FW 런웨이 하이라이트: 구조적 레더와 드레이프 실루엣',
+    summary:
+      '파리 패션위크에서 공개된 릭 오웬스의 이번 시즌 컬렉션은 과장된 숄더 라인과 길게 떨어지는 모노크롬 실루엣의 대비가 핵심입니다. 일상에서는 깔끔한 화이트 티셔츠나 와이드 데님 위에 구조적인 블랙 아우터를 툭 걸쳐 밸런스를 맞추는 것이 포인트입니다.',
+    keyItems: ['구조적 블랙 블레이저', '청키 플랫폼 부츠', '실버 체인 하드웨어'],
+    searchQuery: 'Rick Owens FW Runway Fashion',
+  },
+  {
+    id: 'l2',
+    tag: 'COLLABORATION DROP',
+    headline: '메종 마르지엘라 x 젠틀몬스터 신규 캡슐 드롭 스타일링 분석',
+    summary:
+      '스티치 디테일이 돋보이는 아세테이트 프레임 아이웨어는 단조로운 미니멀 룩에 즉각적인 하이엔드 무드를 불어넣습니다. 베이직한 셔츠와 슬랙스 조합에 볼드한 선글라스 하나만 더해 핀터레스트 에디토리얼 룩을 완성해 보세요.',
+    keyItems: [
+      '볼드 블랙 아세테이트 선글라스',
+      '오버핏 화이트 티셔츠',
+      '레더 더비 로퍼',
+    ],
+    searchQuery: 'Maison Margiela Gentle Monster',
+  },
+  {
+    id: 'l3',
+    tag: 'EDITORIAL GUIDE',
+    headline: '올드머니 & 미니멀 테일러링: 힘 뺀 클래식의 정수',
+    summary:
+      '로고를 드러내지 않고 원단의 질감과 핏으로 승부하는 올드머니 스타일이 강세입니다. 베이지 트렌치코트와 셀비지 데님, 그리고 클래식한 로퍼 조합은 유행을 타지 않는 가장 세련된 데일리 공식입니다.',
+    keyItems: ['개버딘 트렌치코트', '와이드 셀비지 데님', '클래식 레더 벨트'],
+    searchQuery: 'Old Money Minimalist Tailoring Lookbook',
+  },
+];
+
+const darkArticles: Article[] = [
+  {
+    id: 'd1',
+    tag: 'UNDERGROUND ZINE',
+    headline: '도쿄 시모키타자와 언더그라운드 펑크 아카이브 팝업 리포트',
+    summary:
+      '1990년대 도쿄 스트릿 펑크 아카이브를 재해석한 인디 레이블들의 팝업이 주목받고 있습니다. 해체주의적인 워싱, 디스트로이드 디테일, 그리고 허리 라인을 감싸는 메탈 체인 레이어링이 핵심 코드입니다.',
+    keyItems: ['메탈 월렛 체인', '디스트로이드 와이드 데님', '스터드 레더 벨트'],
+    searchQuery: 'Tokyo Underground Punk Fashion Archive',
+  },
+  {
+    id: 'd2',
+    tag: 'SUBCULTURE DIGGING',
+    headline: '국내외 인디 고스 실버웨어 & 다크 하드웨어 레이블 5선',
+    summary:
+      '올블랙 착장에 차가운 금속성 포인트를 더하는 인디 실버웨어 브랜드들이 서브컬처 씬을 주도하고 있습니다. 925 실버 볼 체인과 십자가·가시 모티프 링은 어두운 톤의 아우터와 완벽한 대비를 이룹니다.',
+    keyItems: [
+      '925 실버 볼 체인 네크리스',
+      '고딕 실버 너클 링',
+      '블랙 싱글 블레이저',
+    ],
+    searchQuery: 'Gothic Silverware Underground Jewelry',
+  },
+  {
+    id: 'd3',
+    tag: 'AVANT-GARDE ARCHIVE',
+    headline: '네오 로리타 & 다크 아방가르드 진(Zine) 발간 및 레이어링 공식',
+    summary:
+      '전통적인 고딕 로리타의 레이스·프릴 요소를 현대적인 스트릿 아우터와 믹스매치하는 네오 로리타 룩이 새로운 흐름을 만들고 있습니다. 묵직한 플랫폼 슈즈와 레이어드 스커트/팬츠의 조합을 시도해 보세요.',
+    keyItems: ['레이스 초커 & 넥타이', '청키 솔 플랫폼 로퍼', '레이어드 블랙 아우터'],
+    searchQuery: 'Neo Gothic Lolita Dark Avant Garde Fashion',
+  },
+];
+
+const lightGenres = [
+  { id: '미니멀', name: '미니멀 에디토리얼', desc: '깔끔한 실루엣과 절제된 컬러' },
+  { id: '아메카지', name: '아메카지 워크웨어', desc: '빈티지 데님과 여유로운 핏' },
+  { id: '스트릿', name: '하이엔드 스트릿', desc: '크림(KREAM) 감성 스니커즈 매치' },
+  {
+    id: '올드머니',
+    name: '올드머니 / 시티보이',
+    desc: '클래식 테일러링과 셔츠 레이어드',
+  },
+];
+
+const darkGenres = [
+  { id: '펑크', name: '네오 펑크 (Punk)', desc: '체인과 레더, 반항적인 레이어링' },
+  { id: '고스', name: '다크 고스 (Goth)', desc: '올블랙 실루엣과 실버 하드웨어' },
+  {
+    id: '로리타',
+    name: '고딕 로리타 (Lolita)',
+    desc: '레이스, 프릴, 플랫폼 슈즈 믹스',
+  },
+  {
+    id: '아방가르드',
+    name: '아방가르드 / 사이버 Y2K',
+    desc: '해체주의 핏과 메탈릭 포인트',
+  },
+];
+
+const sampleUrlCatalog: Record<string, UrlPreviewData> = {
+  musinsa: {
+    url: 'https://www.musinsa.com/search/musinsa/integration?q=빈티지+피그먼트+볼캡',
+    store: 'MUSINSA',
+    name: '빈티지 피그먼트 워싱 로고 볼캡 (차콜)',
+    price: '39,000원',
+    category: '악세사리',
+    season: '사계절',
+    image: createSvgItem('#E4E4E7', '🧢', 'VINTAGE CAP', 'MUSINSA'),
+  },
+  kream: {
+    url: 'https://kream.co.kr/search?keyword=릭오웬스+플랫폼+부츠',
+    store: 'KREAM',
+    name: '릭 오웬스 보조 트랙터 청키 플랫폼 부츠',
+    price: '1,280,000원',
+    category: '신발',
+    season: '봄/가을',
+    image: createSvgItem('#27272A', '🥾', 'PLATFORM BOOTS', 'KREAM'),
+  },
+  zara: {
+    url: 'https://www.google.com/search?q=ZARA+크롭+레더+바이커+자켓',
+    store: 'ZARA',
+    name: '메탈 버클 크롭 페이크 레더 바이커 자켓',
+    price: '109,000원',
+    category: '아우터',
+    season: '봄/가을',
+    image: createSvgItem('#18181B', '🧥', 'LEATHER JACKET', 'ZARA'),
+  },
+  '29cm': {
+    url: 'https://search.shopping.naver.com/search/all?query=르메르+크루아상+백',
+    store: '29CM',
+    name: '소프트 나파 레더 크루아상 크로스백 블랙',
+    price: '158,000원',
+    category: '악세사리',
+    season: '사계절',
+    image: createSvgItem('#F4F4F5', '🥐', 'CROISSANT BAG', '29CM'),
+  },
+};
+
+const ALL_DETAIL_CHIPS = [
+  '실버 하드웨어',
+  '빈티지 워싱',
+  '미니멀 무지',
+  '오버사이즈 핏',
+  '체인 / 레더',
+];
+
+const ALL_PLATFORMS = ['KREAM', '무신사', '에이블리', '네이버 쇼핑'] as const;
+
+const SLOT_CATEGORIES: { key: CategoryType; icon: string; label: string }[] = [
+  { key: '아우터', icon: '🧥', label: '아우터' },
+  { key: '상의', icon: '👕', label: '상의' },
+  { key: '하의', icon: '👖', label: '하의' },
+  { key: '신발', icon: '👞', label: '신발' },
+  { key: '악세사리', icon: '⛓️', label: '악세사리' },
+];
+
+export default function AuraFitClient() {
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [currentTab, setCurrentTab] = useState<MainTab>('wardrobe');
+  const [currentFilter, setCurrentFilter] = useState<string>('전체');
+
+  const [wardrobe, setWardrobe] = useState<ClothItem[]>(defaultWardrobe);
+  const [savedLooks, setSavedLooks] = useState<SavedLook[]>([]);
+  const [communityUsers, setCommunityUsers] =
+    useState<CommunityUser[]>(defaultCommunityUsers);
+  const [selectedClothIds, setSelectedClothIds] = useState<number[]>([
+    103, 101, 102, 105, 106,
+  ]);
+
+  // AI 스타일리스트 설정 상태
+  const [selectedGenre, setSelectedGenre] = useState<string>('미니멀');
+  const [customMood, setCustomMood] = useState<string>('');
+  const [isFilterOpen, setIsFilterOpen] = useState<boolean>(true);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([
+    'KREAM',
+    '무신사',
+  ]);
+  const [budget, setBudget] = useState<string>('5~15만 원');
+  const [activeDetails, setActiveDetails] = useState<string[]>([
+    '실버 하드웨어',
+  ]);
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [loadingTitle, setLoadingTitle] = useState<string>(
+    '선택하신 의류 실루엣 & 컬러 밸런스 분석 중...'
+  );
+  const [stylistResult, setStylistResult] = useState<StylistResult | null>(
+    null
+  );
+
+  // 매거진 모달 & 복귀 배너 상태
+  const [magazineModalOpen, setMagazineModalOpen] = useState<boolean>(false);
+  const [currentArticle, setCurrentArticle] = useState<Article | null>(null);
+  const [visitedExternalMag, setVisitedExternalMag] = useState<boolean>(false);
+  const [returnBannerOpen, setReturnBannerOpen] = useState<boolean>(false);
+
+  // 의류 업로드 모달 상태
+  const [uploadModalOpen, setUploadModalOpen] = useState<boolean>(false);
+  const [uploadMethod, setUploadMethod] = useState<'photo' | 'url'>('photo');
+  const [photoName, setPhotoName] = useState<string>('');
+  const [photoCategory, setPhotoCategory] = useState<CategoryType>('상의');
+  const [photoSeason, setPhotoSeason] = useState<string>('사계절');
+  const [photoStatus, setPhotoStatus] = useState<ClothStatus>('보유 중');
+  const [photoDataUrl, setPhotoDataUrl] = useState<string>('');
+
+  const [shopUrlInput, setShopUrlInput] = useState<string>('');
+  const [isFetchingUrl, setIsFetchingUrl] = useState<boolean>(false);
+  const [urlPreview, setUrlPreview] = useState<UrlPreviewData | null>(null);
+  const [urlStatus, setUrlStatus] = useState<ClothStatus>('구매 예정');
+
+  // 커뮤니티 프로필 모달 상태
+  const [profileModalOpen, setProfileModalOpen] = useState<boolean>(false);
+  const [activeProfileId, setActiveProfileId] = useState<string>('me');
+  const [profileSubTab, setProfileSubTab] = useState<ProfileSubTab>('closet');
+  const [proposalSelectedIds, setProposalSelectedIds] = useState<number[]>([]);
+  const [proposerName, setProposerName] = useState<string>('@aurafit_director');
+  const [proposalNote, setProposalNote] = useState<string>('');
+
+  // DB & AI API 설정 모달 상태
+  const [apiModalOpen, setApiModalOpen] = useState<boolean>(false);
+  const [apiConfig, setApiConfig] = useState<ApiConfig>({
+    geminiKey: '',
+    fashnKey: '',
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+    supabaseKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
+  });
+  const [cfgForm, setCfgForm] = useState<ApiConfig>({
+    geminiKey: '',
+    fashnKey: '',
+    supabaseUrl: '',
+    supabaseKey: '',
+  });
+  const [supabaseConnected, setSupabaseConnected] = useState<boolean>(false);
+
+  // 토스트 알림
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  const showToast = useCallback((message: string) => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 2600);
+  }, []);
+
+  // 초기 로컬 스토리지 복원
+  useEffect(() => {
+    try {
+      const savedTheme = localStorage.getItem(STORAGE_KEYS.THEME);
+      if (savedTheme !== null) {
+        const dark = Boolean(JSON.parse(savedTheme));
+        setIsDarkMode(dark);
+        setSelectedGenre(dark ? '펑크' : '미니멀');
+      }
+
+      const savedWardrobe = localStorage.getItem(STORAGE_KEYS.WARDROBE);
+      if (savedWardrobe) {
+        const parsed = JSON.parse(savedWardrobe);
+        if (Array.isArray(parsed)) setWardrobe(parsed);
+      }
+
+      const savedLooksRaw = localStorage.getItem(STORAGE_KEYS.SAVED_LOOKS);
+      if (savedLooksRaw) {
+        const parsed = JSON.parse(savedLooksRaw);
+        if (Array.isArray(parsed)) setSavedLooks(parsed);
+      }
+
+      const savedComm = localStorage.getItem(STORAGE_KEYS.COMMUNITY);
+      if (savedComm) {
+        const parsed = JSON.parse(savedComm);
+        if (Array.isArray(parsed)) setCommunityUsers(parsed);
+      }
+
+      const savedSel = localStorage.getItem(STORAGE_KEYS.SELECTED_IDS);
+      if (savedSel) {
+        const parsed = JSON.parse(savedSel);
+        if (Array.isArray(parsed)) setSelectedClothIds(parsed);
+      }
+
+      const savedCfg = localStorage.getItem(STORAGE_KEYS.CONFIG);
+      if (savedCfg) {
+        const parsed = JSON.parse(savedCfg) as Partial<ApiConfig>;
+        setApiConfig((prev) => ({
+          geminiKey: parsed.geminiKey || '',
+          fashnKey: parsed.fashnKey || '',
+          supabaseUrl: parsed.supabaseUrl || prev.supabaseUrl,
+          supabaseKey: parsed.supabaseKey || prev.supabaseKey,
+        }));
+      }
+    } catch {
+      // 스토리지 비활성 환경에서는 기본 상태 유지
+    }
+    setIsHydrated(true);
+  }, []);
+
+  // 상태 변경 시 자동 저장 및 Supabase 클라우드 스냅샷 동기화
+  useEffect(() => {
+    if (!isHydrated) return;
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.THEME, JSON.stringify(isDarkMode));
+      localStorage.setItem(STORAGE_KEYS.WARDROBE, JSON.stringify(wardrobe));
+      localStorage.setItem(
+        STORAGE_KEYS.SAVED_LOOKS,
+        JSON.stringify(savedLooks)
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.COMMUNITY,
+        JSON.stringify(communityUsers)
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.SELECTED_IDS,
+        JSON.stringify(selectedClothIds)
+      );
+      localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(apiConfig));
+    } catch {
+      // 무시
+    }
+
+    const sbUrl =
+      apiConfig.supabaseUrl || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+    const sbKey =
+      apiConfig.supabaseKey || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+    if (sbUrl && sbKey) {
+      try {
+        const client: SupabaseClient = createClient(sbUrl, sbKey);
+        setSupabaseConnected(true);
+        client
+          .from('aurafit_snapshots')
+          .upsert({
+            id: 'default_user_snapshot',
+            wardrobe_json: wardrobe,
+            saved_looks_json: savedLooks,
+            community_json: communityUsers,
+            updated_at: new Date().toISOString(),
+          })
+          .then(() => {});
+      } catch {
+        setSupabaseConnected(false);
+      }
+    } else {
+      setSupabaseConnected(false);
+    }
+  }, [
+    isHydrated,
+    isDarkMode,
+    wardrobe,
+    savedLooks,
+    communityUsers,
+    selectedClothIds,
+    apiConfig,
+  ]);
+
+  // 외부 매거진 검색 후 탭 복귀 감지
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (
+        document.visibilityState === 'visible' &&
+        visitedExternalMag &&
+        currentArticle
+      ) {
+        setVisitedExternalMag(false);
+        setMagazineModalOpen(false);
+        setReturnBannerOpen(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () =>
+      document.removeEventListener('visibilitychange', handleVisibility);
+  }, [visitedExternalMag, currentArticle]);
+
+  const validSelectedIds = selectedClothIds.filter((id) =>
+    wardrobe.some((w) => w.id === id)
+  );
+  const pickedWardrobeItems = wardrobe.filter((w) =>
+    validSelectedIds.includes(w.id)
+  );
+
+  const meUser = communityUsers.find((u) => u.id === 'me');
+  const myProposalsCount = meUser ? meUser.proposals.length : 0;
+
+  const togglePersonaMode = () => {
+    const nextDark = !isDarkMode;
+    setIsDarkMode(nextDark);
+    setSelectedGenre(nextDark ? darkGenres[0].id : lightGenres[0].id);
+    showToast(
+      nextDark
+        ? '🌑 NIGHT 모드 전환: 언더그라운드 서브컬처(펑크·고스·로리타) 엔진 활성화'
+        : '☀️ DAY 모드 전환: 핀터레스트 메이저 에디토리얼 엔진 활성화'
+    );
+  };
+
+  const toggleTouchCloth = (clothId: number) => {
+    const target = wardrobe.find((w) => w.id === clothId);
+    if (!target) return;
+
+    setSelectedClothIds((prev) => {
+      if (prev.includes(clothId)) {
+        return prev.filter((id) => id !== clothId);
+      }
+      const sameCat = wardrobe.find(
+        (w) => prev.includes(w.id) && w.category === target.category
+      );
+      const filtered = sameCat ? prev.filter((id) => id !== sameCat.id) : prev;
+      return [...filtered, clothId];
+    });
+  };
+
+  const clearTouchSelection = () => {
+    setSelectedClothIds([]);
+    showToast('선택된 코디 슬롯이 초기화되었습니다.');
+  };
+
+  const autoTouchSelectOutfit = (): number[] => {
+    const categoriesOrder: CategoryType[] = [
+      '아우터',
+      '상의',
+      '하의',
+      '신발',
+      '악세사리',
+    ];
+    const nextIds: number[] = [];
+    categoriesOrder.forEach((cat) => {
+      const candidates = wardrobe.filter((w) => w.category === cat);
+      if (candidates.length > 0) {
+        const pick = candidates[Math.floor(Math.random() * candidates.length)];
+        nextIds.push(pick.id);
+      }
+    });
+    setSelectedClothIds(nextIds);
+    showToast(
+      '✨ AI가 카테고리별 최적의 옷장 아이템을 원터치 슬롯에 채웠습니다!'
+    );
+    return nextIds;
+  };
+
+  const generateAIOutfit = async (
+    overrideMood?: string,
+    overrideIds?: number[]
+  ) => {
+    if (wardrobe.length === 0) {
+      showToast('먼저 내 옷장에 의류를 1개 이상 등록해 주세요.');
+      return;
+    }
+
+    let activeIds = overrideIds ?? validSelectedIds;
+    if (activeIds.length === 0) {
+      activeIds = autoTouchSelectOutfit();
+    }
+
+    const picked = wardrobe.filter((w) => activeIds.includes(w.id));
+    const moodText = (overrideMood ?? customMood).trim();
+    const activeGenre = moodText || selectedGenre;
+
+    setIsGenerating(true);
+    setStylistResult(null);
+    setLoadingTitle(
+      '선택하신 의류 실루엣 & 컬러 밸런스 분석 중 (서버 API 연동 확인)...'
+    );
+
+    let aiStylistNote = '';
+    let aiTitle = '';
+    let aiSuggestions: MissingSuggestion[] | null = null;
+    let usedRealApi = false;
+
+    try {
+      const resp = await fetch('/api/stylist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          isDarkMode,
+          activeGenre,
+          items: picked.map((p) => ({ name: p.name, category: p.category })),
+          selectedDetails: activeDetails,
+          budget,
+          clientGeminiKey: apiConfig.geminiKey,
+        }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data?.usedRealApi && data?.note) {
+          usedRealApi = true;
+          aiStylistNote = data.note;
+          aiTitle = data.title || `${activeGenre} 원터치 커스텀 룩`;
+          aiSuggestions = data.missingItems;
+        }
+      }
+    } catch {
+      // 서버 API 미설정 시 내장 엔진으로 즉시 폴백
+    }
+
+    setTimeout(() => {
+      const hasWishlist = picked.some((p) => p.status === '구매 예정');
+      const firstItemName = picked[0]?.name || '메인 아이템';
+      const secondItemName = picked[1]?.name || '레이어드 아이템';
+
+      if (!usedRealApi) {
+        aiTitle = isDarkMode
+          ? `${activeGenre} 서브컬처 아방가르드 스타일링`
+          : `핀터레스트 무드 ${activeGenre} 데일리 룩`;
+
+        aiStylistNote = isDarkMode
+          ? `${
+              hasWishlist ? '[구매 예정 위시템 시뮬레이션 반영] ' : ''
+            }터치로 선택하신 '${firstItemName}'와 '${secondItemName}'의 다크 톤온톤 대비가 강렬합니다. 여기에 실버 체인 하드웨어와 플랫폼 슈즈로 무게감을 아래로 떨어뜨리면 완성도 높은 언더그라운드 룩이 연출됩니다.`
+          : `${
+              hasWishlist ? '[구매 예정 위시템 시뮬레이션 반영] ' : ''
+            }선택하신 '${firstItemName}'와 '${secondItemName}' 조합은 핀터레스트 에디토리얼 룩북의 정석 비율입니다. 이너를 살짝 넣어 입어 다리 라인을 길어 보이게 연출해 보세요.`;
+      }
+
+      let suggestions = aiSuggestions;
+      if (!suggestions || suggestions.length === 0) {
+        if (currentArticle && moodText.includes('매거진 무드')) {
+          suggestions = currentArticle.keyItems.slice(0, 2).map((kItem) => ({
+            name: kItem,
+            reason: `방금 읽으신 '${currentArticle.tag}' 매거진 트렌드 핵심 아이템`,
+            tag: activeDetails[0] || budget,
+          }));
+        } else {
+          suggestions = isDarkMode
+            ? [
+                {
+                  name: '스터드 디테일 빈티지 레더 벨트',
+                  reason: '허리 라인에 펑크 무드와 메탈 포인트 추가',
+                  tag: activeDetails[0] || '실버 하드웨어',
+                },
+                {
+                  name: '크롬하츠 스타일 대거 실버 볼 체인 팔찌',
+                  reason: '소매 끝 허전함을 채워주는 언더그라운드 필수템',
+                  tag: budget,
+                },
+              ]
+            : [
+                {
+                  name: '스투시 워시드 로우 프로파일 볼캡 블랙',
+                  reason: '에디토리얼 룩에 자연스러운 스트릿 밸런스 부여',
+                  tag: activeDetails[0] || '빈티지 워싱',
+                },
+                {
+                  name: '르메르 스타일 소프트 레더 크로스백',
+                  reason: '전체 실루엣을 정돈해 주는 핀터레스트 핵심 잡화',
+                  tag: budget,
+                },
+              ];
+        }
+      }
+
+      const detailSummary =
+        activeDetails.length > 0 ? activeDetails.join(', ') : '기본 디테일';
+
+      setStylistResult({
+        id: Date.now(),
+        genreTag: `${
+          isDarkMode ? '🌑 UNDERGROUND' : '☀️ EDITORIAL'
+        } · ${activeGenre}`,
+        apiBadge: usedRealApi
+          ? '⚡ Gemini Server API 분석 완료'
+          : apiConfig.fashnKey
+          ? '✨ Virtual Try-On Pipeline Ready'
+          : '✨ AuraFit One-Tap Engine',
+        title: aiTitle,
+        note: aiStylistNote,
+        items: picked,
+        suggestions,
+        filterSummary: `예산: ${budget} · ${detailSummary}`,
+        mode: isDarkMode ? 'NIGHT' : 'DAY',
+        genre: activeGenre,
+      });
+      setIsGenerating(false);
+    }, 380);
+  };
+
+  const handleSaveCurrentLook = () => {
+    if (!stylistResult) return;
+    const newLook: SavedLook = {
+      id: Date.now(),
+      genre: stylistResult.genre,
+      mode: stylistResult.mode,
+      title: stylistResult.title,
+      items: stylistResult.items,
+      note: stylistResult.note,
+    };
+    setSavedLooks((prev) => [newLook, ...prev]);
+    showToast("코디가 '저장된 룩북'에 영구 보관되었습니다!");
+  };
+
+  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      if (typeof ev.target?.result === 'string') {
+        setPhotoDataUrl(ev.target.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleClothUploadSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!photoDataUrl) {
+      showToast('업로드할 의류 사진을 먼저 선택해 주세요.');
+      return;
+    }
+    const newCloth: ClothItem = {
+      id: Date.now(),
+      name: photoName.trim() || '새 의류 아이템',
+      category: photoCategory,
+      season: photoSeason,
+      status: photoStatus,
+      sourceUrl: '',
+      image: photoDataUrl,
+    };
+    setWardrobe((prev) => [newCloth, ...prev]);
+    setSelectedClothIds((prev) => [
+      ...prev.filter((cid) => {
+        const found = wardrobe.find((w) => w.id === cid);
+        return found ? found.category !== newCloth.category : true;
+      }),
+      newCloth.id,
+    ]);
+    setPhotoName('');
+    setPhotoDataUrl('');
+    setUploadModalOpen(false);
+    showToast(`'${newCloth.name}' 아이템이 옷장에 등록되었습니다.`);
+  };
+
+  const fetchUrlMetadata = async (preset?: UrlPreviewData) => {
+    if (preset) {
+      setShopUrlInput(preset.url);
+      setUrlPreview(preset);
+      setUrlStatus('구매 예정');
+      return;
+    }
+
+    const trimmed = shopUrlInput.trim();
+    if (!trimmed) {
+      showToast('쇼핑몰 상품 링크(URL)를 입력하거나 샘플 버튼을 눌러주세요.');
+      return;
+    }
+
+    setIsFetchingUrl(true);
+    try {
+      const res = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: trimmed }),
+      });
+      const json = await res.json();
+      if (json?.success && json?.name) {
+        setUrlPreview({
+          url: trimmed,
+          store: json.store || 'ONLINE STORE',
+          name: json.name,
+          price: json.price || '실시간 링크 연동 상품',
+          category: (json.category as CategoryType) || '상의',
+          season: json.season || '사계절',
+          image:
+            json.image ||
+            createSvgItem('#F4F4F5', '🛍️', json.store || 'STORE', 'URL ITEM'),
+        });
+        setIsFetchingUrl(false);
+        return;
+      }
+    } catch {
+      // 폴백으로 진행
+    }
+
+    const lower = trimmed.toLowerCase();
+    let storeName = 'ONLINE STORE';
+    if (lower.includes('musinsa')) storeName = 'MUSINSA';
+    else if (lower.includes('kream')) storeName = 'KREAM';
+    else if (lower.includes('ably') || lower.includes('a-bly'))
+      storeName = 'ABLY';
+    else if (lower.includes('29cm')) storeName = '29CM';
+    else if (lower.includes('zara')) storeName = 'ZARA';
+
+    setUrlPreview({
+      url: trimmed,
+      store: storeName,
+      name: `[${storeName}] 에디토리얼 슬림핏 니트 가디건`,
+      price: '68,000원 (직접 수정 가능)',
+      category: '상의',
+      season: '봄/가을',
+      image: createSvgItem('#F4F4F5', '🧶', storeName, 'URL LINKED'),
+    });
+    setIsFetchingUrl(false);
+  };
+
+  const confirmUrlClothUpload = () => {
+    if (!urlPreview) return;
+    const newCloth: ClothItem = {
+      id: Date.now(),
+      name: urlPreview.name.trim() || '링크 연동 아이템',
+      category: urlPreview.category,
+      season: urlPreview.season,
+      status: urlStatus,
+      sourceUrl: urlPreview.url,
+      image: urlPreview.image,
+    };
+    setWardrobe((prev) => [newCloth, ...prev]);
+    setSelectedClothIds((prev) => [
+      ...prev.filter((cid) => {
+        const found = wardrobe.find((w) => w.id === cid);
+        return found ? found.category !== newCloth.category : true;
+      }),
+      newCloth.id,
+    ]);
+    setUrlPreview(null);
+    setShopUrlInput('');
+    setUploadModalOpen(false);
+    showToast(
+      `쇼핑몰 링크 상품('${newCloth.status}')이 옷장 등록 및 코디 슬롯에 선택되었습니다!`
+    );
+  };
+
+  const deleteCloth = (id: number) => {
+    setWardrobe((prev) => prev.filter((w) => w.id !== id));
+    setSelectedClothIds((prev) => prev.filter((cid) => cid !== id));
+    showToast('의류가 옷장에서 삭제되었습니다.');
+  };
+
+  // 프로필 모달 헬퍼
+  const openUserProfileModal = (
+    userId: string,
+    subTab: ProfileSubTab = 'closet'
+  ) => {
+    setActiveProfileId(userId);
+    setProfileSubTab(subTab);
+    setProposalSelectedIds([]);
+    setProfileModalOpen(true);
+  };
+
+  const activeProfileUser: CommunityUser | undefined = (() => {
+    const found = communityUsers.find((u) => u.id === activeProfileId);
+    if (!found) return undefined;
+    if (found.id === 'me') {
+      return { ...found, closet: wardrobe };
+    }
+    return found;
+  })();
+
+  const toggleProposalItem = (itemId: number) => {
+    setProposalSelectedIds((prev) =>
+      prev.includes(itemId)
+        ? prev.filter((id) => id !== itemId)
+        : [...prev, itemId]
+    );
+  };
+
+  const submitOutfitProposal = () => {
+    if (!activeProfileUser) return;
+    if (proposalSelectedIds.length < 2) {
+      showToast('최소 2개 이상의 의류를 터치해 선택해 주세요.');
+      return;
+    }
+    const newProposal: Proposal = {
+      id: 'prop_' + Date.now(),
+      proposer: proposerName.trim() || '@aurafit_stylist',
+      note:
+        proposalNote.trim() ||
+        '이 아이템들을 매치하면 실루엣과 톤앤매너가 가장 돋보입니다!',
+      itemIds: [...proposalSelectedIds],
+      likes: 1,
+      createdAt: '방금 전',
+    };
+    setCommunityUsers((prev) =>
+      prev.map((u) =>
+        u.id === activeProfileUser.id
+          ? { ...u, proposals: [newProposal, ...u.proposals] }
+          : u
+      )
+    );
+    setProposalNote('');
+    setProposalSelectedIds([]);
+    setProfileSubTab('inbox');
+    showToast(
+      `${activeProfileUser.handle} 님의 제안함에 코디 제안서가 등록되었습니다!`
+    );
+  };
+
+  const likeProposal = (propId: string) => {
+    if (!activeProfileUser) return;
+    setCommunityUsers((prev) =>
+      prev.map((u) =>
+        u.id === activeProfileUser.id
+          ? {
+              ...u,
+              proposals: u.proposals.map((p) =>
+                p.id === propId ? { ...p, likes: (p.likes || 0) + 1 } : p
+              ),
+            }
+          : u
+      )
+    );
+  };
+
+  const adoptProposalToSaved = (prop: Proposal) => {
+    if (!activeProfileUser) return;
+    const matchedItems = activeProfileUser.closet.filter((c) =>
+      prop.itemIds.includes(c.id)
+    );
+    const adopted: SavedLook = {
+      id: Date.now(),
+      genre: `${prop.proposer} 제안 코디`,
+      mode: isDarkMode ? 'NIGHT' : 'DAY',
+      title: `${activeProfileUser.handle} 옷장 채택 코디`,
+      items: matchedItems,
+      note: prop.note,
+    };
+    setSavedLooks((prev) => [adopted, ...prev]);
+    showToast(
+      "제안받은 코디가 '저장된 룩북'에 채택 및 보관되었습니다!"
+    );
+  };
+
+  // DB 백업·복원·SQL 복사
+  const copySupabaseSql = async () => {
+    const sql = `-- AuraFit Supabase PostgreSQL 테이블 생성 스크립트
+create table if not exists public.aurafit_snapshots (
+  id text primary key,
+  wardrobe_json jsonb not null default '[]'::jsonb,
+  saved_looks_json jsonb not null default '[]'::jsonb,
+  community_json jsonb not null default '[]'::jsonb,
+  updated_at timestamptz default now()
+);
+alter table public.aurafit_snapshots enable row level security;
+create policy "Allow public read/write for demo" on public.aurafit_snapshots for all using (true) with check (true);`;
+
+    try {
+      await navigator.clipboard.writeText(sql);
+    } catch {
+      const temp = document.createElement('textarea');
+      temp.value = sql;
+      document.body.appendChild(temp);
+      temp.select();
+      document.execCommand('copy');
+      document.body.removeChild(temp);
+    }
+    showToast('Supabase SQL 스키마가 클립보드에 복사되었습니다!');
+  };
+
+  const exportDatabaseJson = () => {
+    const backup = {
+      wardrobe,
+      savedLooks,
+      communityUsers,
+      selectedClothIds: validSelectedIds,
+      exportedAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `aurafit_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('옷장 및 코디 데이터 백업(JSON) 파일이 다운로드되었습니다.');
+  };
+
+  const importDatabaseJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(String(ev.target?.result || '{}'));
+        if (Array.isArray(parsed.wardrobe)) setWardrobe(parsed.wardrobe);
+        if (Array.isArray(parsed.savedLooks)) setSavedLooks(parsed.savedLooks);
+        if (Array.isArray(parsed.communityUsers))
+          setCommunityUsers(parsed.communityUsers);
+        if (Array.isArray(parsed.selectedClothIds))
+          setSelectedClothIds(parsed.selectedClothIds);
+        setApiModalOpen(false);
+        showToast('백업 데이터가 성공적으로 복원되었습니다!');
+      } catch {
+        showToast('올바른 JSON 백업 파일이 아닙니다.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const resetAllDatabase = () => {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.WARDROBE);
+      localStorage.removeItem(STORAGE_KEYS.SAVED_LOOKS);
+      localStorage.removeItem(STORAGE_KEYS.COMMUNITY);
+      localStorage.removeItem(STORAGE_KEYS.SELECTED_IDS);
+    } catch {
+      // 무시
+    }
+    setWardrobe(defaultWardrobe);
+    setSavedLooks([]);
+    setCommunityUsers(defaultCommunityUsers);
+    setSelectedClothIds([103, 101, 102, 105, 106]);
+    setApiModalOpen(false);
+    showToast('초기 샘플 데이터 상태로 리셋되었습니다.');
+  };
+
+  // 필터링된 옷장 목록
+  const filteredWardrobe = wardrobe.filter((item) => {
+    if (currentFilter === '구매 예정') return item.status === '구매 예정';
+    if (currentFilter !== '전체') return item.category === currentFilter;
+    return true;
+  });
+
+  const activeArticles = isDarkMode ? darkArticles : lightArticles;
+  const activeGenres = isDarkMode ? darkGenres : lightGenres;
+  const platformsToRender =
+    selectedPlatforms.length > 0 ? selectedPlatforms : ['KREAM', '무신사'];
+
+  return (
+    <div
+      className={`min-h-screen flex flex-col transition-colors duration-300 ${
+        isDarkMode
+          ? 'bg-[#0A0A0A] text-zinc-100 selection:bg-rose-600 selection:text-white'
+          : 'bg-[#FAFAFA] text-zinc-900 selection:bg-zinc-900 selection:text-white'
+      }`}
+    >
+      {/* 1. 상단 모드 연동형 뉴스 티커 */}
+      <div
+        className={`w-full min-h-[40px] overflow-hidden border-b text-xs flex items-center transition-colors duration-300 select-none ${
+          isDarkMode
+            ? 'border-rose-900/60 bg-black text-rose-400'
+            : 'border-zinc-200 bg-zinc-950 text-zinc-100'
+        }`}
+      >
+        <div className="animate-marquee whitespace-nowrap flex items-center gap-6 px-4 py-1.5">
+          {[...activeArticles, ...activeArticles].map((art, idx) => (
+            <button
+              key={`${art.id}-${idx}`}
+              type="button"
+              onClick={() => {
+                setCurrentArticle(art);
+                setVisitedExternalMag(false);
+                setMagazineModalOpen(true);
+              }}
+              className={`inline-flex items-center gap-2 px-3 py-1 rounded-full transition cursor-pointer ${
+                isDarkMode
+                  ? 'hover:bg-rose-950/70 text-rose-300'
+                  : 'hover:bg-zinc-800 text-zinc-100'
+              }`}
+            >
+              <span
+                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                  isDarkMode
+                    ? 'bg-rose-600 text-white'
+                    : 'bg-amber-400 text-zinc-950'
+                }`}
+              >
+                {art.tag}
+              </span>
+              <span className="font-medium underline-offset-4 hover:underline">
+                {art.headline}
+              </span>
+              <span className="text-[10px] opacity-60">읽기 ↗</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 2. 메인 헤더 & 고정 크기 듀얼 모드 스위치 */}
+      <header
+        className={`sticky top-0 z-40 backdrop-blur-md border-b transition-colors duration-300 ${
+          isDarkMode
+            ? 'bg-[#0A0A0A]/90 border-zinc-800'
+            : 'bg-[#FAFAFA]/90 border-zinc-200'
+        }`}
+      >
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 h-16 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0 shrink-0">
+            <div
+              onClick={() => setCurrentTab('wardrobe')}
+              className="flex items-center gap-2 sm:gap-2.5 cursor-pointer shrink-0"
+            >
+              <div
+                className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl text-white flex items-center justify-center font-editorial italic text-lg sm:text-xl font-bold transition-colors shrink-0 ${
+                  isDarkMode ? 'bg-rose-600' : 'bg-zinc-900'
+                }`}
+              >
+                A
+              </div>
+              <div className="w-[104px] sm:w-[132px] shrink-0">
+                <div className="flex items-center gap-1">
+                  <h1 className="text-base sm:text-lg font-bold tracking-tight leading-none">
+                    AURAFIT
+                  </h1>
+                  <span className="text-[9px] font-extrabold px-1 sm:px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 border border-emerald-500/30">
+                    NEXT
+                  </span>
+                </div>
+                <p
+                  className={`text-[10px] uppercase tracking-widest mt-0.5 truncate ${
+                    isDarkMode ? 'text-rose-500' : 'text-zinc-500'
+                  }`}
+                >
+                  {isDarkMode ? 'Subculture Archive' : 'Editorial Daylight'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCfgForm(apiConfig);
+                setApiModalOpen(true);
+              }}
+              className="hidden xl:inline-flex items-center gap-1.5 h-[30px] px-3 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 hover:bg-emerald-500/20 transition cursor-pointer shrink-0"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <span className="truncate">
+                {supabaseConnected
+                  ? '☁️ Supabase 클라우드 & 로컬 실시간 연동됨'
+                  : '로컬 DB 실시간 자동 저장 중'}
+              </span>
+            </button>
+          </div>
+
+          <div className="flex items-center justify-end gap-1.5 sm:gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => openUserProfileModal('me', 'closet')}
+              className={`h-[36px] sm:h-[38px] px-2.5 sm:px-3 rounded-full border text-xs font-semibold transition inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0 select-none ${
+                isDarkMode
+                  ? 'border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800'
+                  : 'border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100'
+              }`}
+            >
+              <UserCheck className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+              <span className="hidden md:inline whitespace-nowrap">
+                내 프로필·제안함
+              </span>
+              <span className="px-1.5 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-bold leading-none">
+                {myProposalsCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCfgForm(apiConfig);
+                setApiModalOpen(true);
+              }}
+              className={`h-[36px] sm:h-[38px] px-2.5 sm:px-3 rounded-full border text-xs font-semibold transition inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0 select-none ${
+                isDarkMode
+                  ? 'border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800'
+                  : 'border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100'
+              }`}
+            >
+              <Database className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+              <span className="hidden md:inline whitespace-nowrap">
+                DB & AI API 연동
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={togglePersonaMode}
+              className={`group w-[132px] sm:w-[230px] h-[36px] sm:h-[38px] px-2.5 sm:px-3 rounded-full border text-xs font-semibold shadow-sm transition-colors inline-flex items-center justify-between gap-1.5 sm:gap-2 cursor-pointer shrink-0 select-none ${
+                isDarkMode
+                  ? 'border-rose-500/50 bg-zinc-900 text-rose-400 hover:bg-zinc-800'
+                  : 'border-zinc-300 bg-white text-zinc-900 hover:shadow'
+              }`}
+            >
+              <span className="inline-flex items-center gap-1 sm:gap-1.5 min-w-0 truncate">
+                <span className="text-sm leading-none shrink-0">
+                  {isDarkMode ? '🌑' : '☀️'}
+                </span>
+                <span className="hidden sm:inline truncate">
+                  {isDarkMode ? 'NIGHT · 언더그라운드' : 'DAY · 메이저 에디토리얼'}
+                </span>
+                <span className="sm:hidden text-[11px] truncate">
+                  {isDarkMode ? 'NIGHT · 다크' : 'DAY · 메이저'}
+                </span>
+              </span>
+              <span
+                className={`w-8 h-4 rounded-full p-0.5 inline-flex items-center transition-colors shrink-0 ${
+                  isDarkMode
+                    ? 'bg-rose-950 border border-rose-700/60'
+                    : 'bg-zinc-200'
+                }`}
+              >
+                <span
+                  className={`w-3 h-3 rounded-full shadow-sm transition-transform duration-300 ${
+                    isDarkMode
+                      ? 'bg-rose-500 translate-x-3.5'
+                      : 'bg-zinc-900 translate-x-0'
+                  }`}
+                />
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* 4개 메인 탭 네비게이션 */}
+        <nav className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center gap-2 sm:gap-6 overflow-x-auto no-scrollbar border-t border-zinc-200/40">
+          {[
+            {
+              id: 'wardrobe' as MainTab,
+              icon: Shirt,
+              label: `내 옷장 (${wardrobe.length})`,
+            },
+            {
+              id: 'stylist' as MainTab,
+              icon: Sparkles,
+              label: '원터치 코디 & AI 스타일리스트',
+            },
+            {
+              id: 'community' as MainTab,
+              icon: Users,
+              label: '남의 옷장 코디 & 프로필',
+              badge: 'OPEN',
+            },
+            {
+              id: 'saved' as MainTab,
+              icon: Bookmark,
+              label: `저장된 룩북 (${savedLooks.length})`,
+            },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const active = currentTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setCurrentTab(tab.id)}
+                className={`h-[46px] px-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 select-none ${
+                  active
+                    ? isDarkMode
+                      ? 'border-rose-500 text-white'
+                      : 'border-zinc-900 text-zinc-900'
+                    : isDarkMode
+                    ? 'border-transparent text-zinc-500 hover:text-zinc-200'
+                    : 'border-transparent text-zinc-500 hover:text-zinc-900'
+                }`}
+              >
+                <Icon className="w-4 h-4 shrink-0" />
+                <span>{tab.label}</span>
+                {tab.badge && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500 text-white font-bold leading-none">
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+      </header>
+
+      {/* 토스트 알림 */}
+      <div className="fixed top-28 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className={`px-4 py-3 rounded-xl text-xs font-semibold shadow-lg flex items-center gap-2 ${
+              isDarkMode ? 'bg-rose-600 text-white' : 'bg-zinc-900 text-white'
+            }`}
+          >
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{t.message}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* 3. 메인 컨텐츠 영역 */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 pb-32">
+        {/* TAB 1: 내 옷장 */}
+        {currentTab === 'wardrobe' && (
+          <section className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                  One-Tap Digital Closet & URL Simulator
+                </span>
+                <h2 className="text-2xl sm:text-3xl font-bold tracking-tight mt-0.5">
+                  내 옷장 아카이브
+                </h2>
+                <p className="text-xs sm:text-sm text-zinc-500 mt-1">
+                  옷 카드를{' '}
+                  <strong className="font-semibold text-rose-500">
+                    한 번 터치(클릭)
+                  </strong>
+                  하면 코디 슬롯에 바로 담깁니다. 사진 업로드나{' '}
+                  <strong className="font-semibold">무신사·KREAM 링크</strong>로
+                  새 옷을 등록해 보세요.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentTab('stylist')}
+                  className={`px-3.5 py-3 rounded-xl border text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                    isDarkMode
+                      ? 'border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800'
+                      : 'border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100'
+                  }`}
+                >
+                  <CheckSquare className="w-4 h-4 text-rose-500" /> 선택된 옷으로
+                  코디 ({validSelectedIds.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUploadModalOpen(true)}
+                  className={`px-4 py-3 rounded-xl text-white text-xs sm:text-sm font-semibold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer ${
+                    isDarkMode
+                      ? 'bg-rose-600 hover:bg-rose-500'
+                      : 'bg-zinc-900 hover:opacity-90'
+                  }`}
+                >
+                  <Plus className="w-4 h-4" /> 새 의류 등록하기
+                </button>
+              </div>
+            </div>
+
+            {/* 카테고리 필터 */}
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 max-w-full">
+              {[
+                { key: '전체', label: '전체' },
+                { key: '아우터', label: '아우터' },
+                { key: '상의', label: '상의' },
+                { key: '하의', label: '하의' },
+                { key: '신발', label: '신발' },
+                { key: '악세사리', label: '악세사리' },
+                { key: '구매 예정', label: '✨ 구매 예정 위시템' },
+              ].map((cat) => {
+                const active = currentFilter === cat.key;
+                const isWish = cat.key === '구매 예정';
+                return (
+                  <button
+                    key={cat.key}
+                    type="button"
+                    onClick={() => setCurrentFilter(cat.key)}
+                    className={`h-[34px] px-4 rounded-full text-xs font-semibold border transition-colors cursor-pointer shrink-0 select-none ${
+                      active
+                        ? isDarkMode
+                          ? 'bg-rose-600 text-white border-transparent'
+                          : 'bg-zinc-900 text-white border-transparent'
+                        : isWish
+                        ? isDarkMode
+                          ? 'bg-zinc-900 border-amber-500/60 text-amber-400 hover:border-amber-400'
+                          : 'bg-white border-amber-300 text-amber-700 hover:border-amber-500'
+                        : isDarkMode
+                        ? 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600'
+                        : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-400'
+                    }`}
+                  >
+                    {cat.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 옷장 그리드 */}
+            {filteredWardrobe.length === 0 ? (
+              <div
+                className={`py-14 text-center rounded-2xl border border-dashed text-xs ${
+                  isDarkMode
+                    ? 'border-zinc-800 text-zinc-500'
+                    : 'border-zinc-200 text-zinc-400'
+                }`}
+              >
+                해당 조건의 의류가 없습니다. 새 의류 등록하기 버튼으로 사진이나
+                쇼핑몰 링크를 추가해 보세요!
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                {filteredWardrobe.map((item) => {
+                  const isWishlist = item.status === '구매 예정';
+                  const isSelected = validSelectedIds.includes(item.id);
+                  return (
+                    <div
+                      key={item.id}
+                      onClick={() => toggleTouchCloth(item.id)}
+                      className={`group relative rounded-2xl overflow-hidden transition-all cursor-pointer select-none ${
+                        isDarkMode ? 'bg-zinc-900' : 'bg-white'
+                      } ${
+                        isSelected
+                          ? 'border-2 border-rose-500 ring-2 ring-rose-500/25 touch-card-active'
+                          : isDarkMode
+                          ? isWishlist
+                            ? 'border border-amber-500/60'
+                            : 'border border-zinc-800 hover:border-zinc-600'
+                          : isWishlist
+                          ? 'border border-amber-400 shadow-sm'
+                          : 'border border-zinc-200 hover:border-zinc-400'
+                      }`}
+                    >
+                      <div className="aspect-[4/4.5] overflow-hidden bg-zinc-100 relative">
+                        <img
+                          src={item.image}
+                          alt={item.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+
+                        <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-[10px] font-bold shadow-sm transition ${
+                              isSelected
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-black/70 text-white group-hover:bg-rose-600'
+                            }`}
+                          >
+                            {isSelected ? '선택됨 ✓' : '터치 선택'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteCloth(item.id);
+                            }}
+                            title="삭제"
+                            className="w-7 h-7 rounded-full bg-black/70 text-white flex items-center justify-center hover:bg-rose-600 transition cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="absolute top-2.5 left-2.5 flex flex-col gap-1">
+                          {isWishlist && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-400 text-zinc-950 shadow-sm">
+                              ✨ 구매 예정
+                            </span>
+                          )}
+                          {item.sourceUrl && (
+                            <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-zinc-900/85 text-emerald-400 backdrop-blur-sm">
+                              🔗 URL 연동
+                            </span>
+                          )}
+                        </div>
+
+                        <span className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-black/75 text-white backdrop-blur-sm">
+                          {item.category}
+                        </span>
+                      </div>
+                      <div className="p-3">
+                        <p className="text-xs font-bold truncate">{item.name}</p>
+                        <div className="flex items-center justify-between mt-1">
+                          <p className="text-[11px] text-zinc-400">
+                            {item.season}
+                          </p>
+                          {item.sourceUrl && (
+                            <a
+                              href={item.sourceUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-[10px] font-semibold text-blue-500 hover:underline"
+                            >
+                              원본 상품 ↗
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* 하단 원터치 선택 요약 바 */}
+            {validSelectedIds.length > 0 && (
+              <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl rounded-2xl bg-zinc-950/95 text-white border border-zinc-700 p-3.5 shadow-2xl backdrop-blur-md flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-xs font-bold shrink-0">
+                    {validSelectedIds.length}개 터치 선택됨
+                  </span>
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                    {pickedWardrobeItems.map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => toggleTouchCloth(item.id)}
+                        title={`터치하여 선택 해제: ${item.name}`}
+                        className="relative w-9 h-9 rounded-lg overflow-hidden border border-white/40 bg-white shrink-0 cursor-pointer group"
+                      >
+                        <img
+                          src={item.image}
+                          alt={item.name}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center text-[10px] text-white font-bold transition">
+                          ✕
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 ml-auto">
+                  <button
+                    type="button"
+                    onClick={clearTouchSelection}
+                    className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold transition cursor-pointer"
+                  >
+                    초기화
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCurrentTab('stylist');
+                      generateAIOutfit();
+                    }}
+                    className="px-4 py-2 rounded-xl bg-white text-zinc-950 hover:bg-zinc-200 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    이 조합으로 AI 코디 생성 <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* TAB 2: 원터치 코디 & AI 스타일리스트 */}
+        {currentTab === 'stylist' && (
+          <section className="space-y-8">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* 좌측 설정 패널 */}
+              <div
+                className={`lg:col-span-4 rounded-2xl border p-5 space-y-5 transition-colors ${
+                  isDarkMode
+                    ? 'border-zinc-800 bg-zinc-900/90 dark-glow'
+                    : 'border-zinc-200 bg-white shadow-sm'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span
+                      className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full ${
+                        isDarkMode
+                          ? 'bg-rose-950 text-rose-400 border border-rose-800/50'
+                          : 'bg-zinc-100 text-zinc-700'
+                      }`}
+                    >
+                      {isDarkMode ? 'SUBCULTURE ENGINE' : 'DAYLIGHT ENGINE'}
+                    </span>
+                    <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
+                      <HandMetal className="w-3.5 h-3.5" /> 원터치 모드 작동 중
+                    </span>
+                  </div>
+                  <h2 className="text-lg font-bold mt-2">AI 스타일리스트 설정</h2>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    우측에서 옷을 톡 터치해 고르거나, 아무것도 고르지 않고 AI에게
+                    100% 자동 조합을 맡길 수 있습니다.
+                  </p>
+                </div>
+
+                <div className="space-y-2 border-t border-zinc-200/70 pt-4">
+                  <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">
+                    1. 패션 장르 & 매거진 무드 (원터치)
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {activeGenres.map((g) => {
+                      const active = selectedGenre === g.id;
+                      return (
+                        <button
+                          key={g.id}
+                          type="button"
+                          onClick={() => setSelectedGenre(g.id)}
+                          className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer select-none ${
+                            isDarkMode
+                              ? active
+                                ? 'border-rose-500 bg-rose-950/40 text-white'
+                                : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-600'
+                              : active
+                              ? 'border-zinc-900 bg-zinc-900 text-white'
+                              : 'border-zinc-200 bg-zinc-50/70 text-zinc-700 hover:border-zinc-400'
+                          }`}
+                        >
+                          <p className="text-xs font-bold">{g.name}</p>
+                          <p className="text-[10px] opacity-75 mt-0.5 line-clamp-1">
+                            {g.desc}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <input
+                    type="text"
+                    value={customMood}
+                    onChange={(e) => setCustomMood(e.target.value)}
+                    placeholder="세부 요청 (예: 한남동 전시회 룩, 릭 오웬스 다크웨어 무드)"
+                    className="w-full mt-1.5 px-3 py-2 rounded-xl border border-zinc-200 bg-transparent text-xs focus:outline-none focus:border-zinc-500 transition"
+                  />
+                </div>
+
+                <div className="border-t border-zinc-200/70 pt-4 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsFilterOpen(!isFilterOpen)}
+                    className="w-full flex items-center justify-between text-left py-0.5 cursor-pointer"
+                  >
+                    <span className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5">
+                      <SlidersHorizontal className="w-3.5 h-3.5" /> 2. 멀티 쇼핑몰
+                      & 디테일 필터
+                    </span>
+                    {isFilterOpen ? (
+                      <ChevronUp className="w-4 h-4 text-zinc-400" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-zinc-400" />
+                    )}
+                  </button>
+
+                  {isFilterOpen && (
+                    <div className="space-y-3 pt-1">
+                      <div>
+                        <p className="text-[11px] text-zinc-500 mb-1">
+                          비교할 구매 플랫폼 (터치하여 선택)
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {ALL_PLATFORMS.map((plat) => {
+                            const checked = selectedPlatforms.includes(plat);
+                            return (
+                              <button
+                                key={plat}
+                                type="button"
+                                onClick={() =>
+                                  setSelectedPlatforms((prev) =>
+                                    prev.includes(plat)
+                                      ? prev.filter((p) => p !== plat)
+                                      : [...prev, plat]
+                                  )
+                                }
+                                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                                  checked
+                                    ? 'bg-rose-600 text-white border-rose-600'
+                                    : 'border-zinc-300 text-zinc-500'
+                                }`}
+                              >
+                                {plat === '네이버 쇼핑' ? '네이버 최저가' : plat}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] text-zinc-500 mb-1">
+                          추가 아이템 예산대
+                        </p>
+                        <select
+                          value={budget}
+                          onChange={(e) => setBudget(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-200 bg-transparent text-xs focus:outline-none"
+                        >
+                          <option value="5만 원 이하" className="text-zinc-900 bg-white">
+                            5만 원 이하 (가성비 악세사리/잡화)
+                          </option>
+                          <option value="5~15만 원" className="text-zinc-900 bg-white">
+                            5만 원 ~ 15만 원 (도메스틱/컨템포러리)
+                          </option>
+                          <option value="15만 원 이상" className="text-zinc-900 bg-white">
+                            15만 원 이상 (디자이너/하이엔드)
+                          </option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] text-zinc-500 mb-1">
+                          선호 디테일 & 소재 (터치 토글)
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {ALL_DETAIL_CHIPS.map((chip) => {
+                            const active = activeDetails.includes(chip);
+                            return (
+                              <button
+                                key={chip}
+                                type="button"
+                                onClick={() =>
+                                  setActiveDetails((prev) =>
+                                    prev.includes(chip)
+                                      ? prev.filter((c) => c !== chip)
+                                      : [...prev, chip]
+                                  )
+                                }
+                                className={`px-2.5 py-1 rounded-full text-[11px] font-medium cursor-pointer transition ${
+                                  active
+                                    ? 'bg-rose-600 text-white'
+                                    : 'border border-zinc-300 text-zinc-500'
+                                }`}
+                              >
+                                {chip}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => generateAIOutfit()}
+                  className={`w-full py-3.5 rounded-xl text-white text-xs sm:text-sm font-bold tracking-wide transition flex items-center justify-center gap-2 shadow-md cursor-pointer ${
+                    isDarkMode
+                      ? 'bg-rose-600 hover:bg-rose-500'
+                      : 'bg-zinc-900 hover:opacity-90'
+                  }`}
+                >
+                  <Wand2 className="w-4 h-4" /> 선택한 조합으로 AI 화보 & 코디 생성
+                </button>
+              </div>
+
+              {/* 우측 원터치 슬롯 트레이 + AI 결과 카드 */}
+              <div className="lg:col-span-8 space-y-6">
+                <div
+                  className={`rounded-2xl border p-4 sm:p-6 space-y-5 transition-colors ${
+                    isDarkMode
+                      ? 'border-zinc-800 bg-zinc-900/90'
+                      : 'border-zinc-200 bg-white shadow-sm'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-rose-500/10 text-rose-500">
+                          ONE-TAP TOUCH SELECTOR
+                        </span>
+                        <span className="text-xs text-zinc-400">
+                          복잡한 드래그 없이 카드를 한 번만 터치해 선택/해제하세요
+                        </span>
+                      </div>
+                      <h3 className="text-base sm:text-lg font-bold mt-1">
+                        원터치 코디 슬롯 트레이
+                      </h3>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => autoTouchSelectOutfit()}
+                        className="px-3 py-1.5 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" /> AI 추천 조합 원터치
+                        채우기
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearTouchSelection}
+                        className="px-3 py-1.5 rounded-xl border border-zinc-200 text-zinc-500 hover:bg-zinc-100/50 text-xs font-semibold transition cursor-pointer"
+                      >
+                        전체 해제
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 5대 카테고리 슬롯 바 */}
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3">
+                    {SLOT_CATEGORIES.map((slot) => {
+                      const matched = wardrobe.find(
+                        (w) =>
+                          validSelectedIds.includes(w.id) &&
+                          w.category === slot.key
+                      );
+                      if (matched) {
+                        return (
+                          <div
+                            key={slot.key}
+                            onClick={() => toggleTouchCloth(matched.id)}
+                            title="터치하면 슬롯에서 해제됩니다"
+                            className={`group relative rounded-2xl border-2 border-rose-500 p-2 text-center cursor-pointer transition select-none touch-card-active ${
+                              isDarkMode ? 'bg-rose-950/25' : 'bg-rose-50/60'
+                            }`}
+                          >
+                            <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-rose-600 text-white text-[10px] font-bold flex items-center justify-center shadow-sm">
+                              ✓
+                            </span>
+                            <img
+                              src={matched.image}
+                              alt={matched.name}
+                              className="w-full h-16 sm:h-20 object-cover rounded-xl bg-white mx-auto mb-1.5"
+                            />
+                            <span className="block text-[10px] font-extrabold text-rose-500">
+                              {slot.label}
+                            </span>
+                            <p className="text-[10px] font-semibold truncate mt-0.5">
+                              {matched.name}
+                            </p>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div
+                          key={slot.key}
+                          className={`rounded-2xl border border-dashed p-2 flex flex-col items-center justify-center text-center min-h-[112px] sm:min-h-[126px] select-none ${
+                            isDarkMode
+                              ? 'border-zinc-800 bg-zinc-950/50 text-zinc-600'
+                              : 'border-zinc-300 bg-zinc-50/70 text-zinc-400'
+                          }`}
+                        >
+                          <span className="text-xl mb-1 opacity-60">
+                            {slot.icon}
+                          </span>
+                          <span className="text-[11px] font-bold">
+                            {slot.label}
+                          </span>
+                          <span className="text-[9px] mt-0.5">아래에서 터치</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* 내 옷장 원터치 선택 그리드 */}
+                  <div className="space-y-2.5 pt-2 border-t border-zinc-200/60">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-bold text-zinc-500">
+                        내 옷장 아이템 (카드를 톡 터치하면 위 슬롯에 바로 장착됩니다)
+                      </p>
+                      <span className="text-[11px] font-semibold text-rose-500">
+                        {validSelectedIds.length}개 선택됨
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5 max-h-[260px] overflow-y-auto p-1">
+                      {wardrobe.map((item) => {
+                        const isSelected = validSelectedIds.includes(item.id);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => toggleTouchCloth(item.id)}
+                            className={`group relative rounded-xl border p-2 text-left transition cursor-pointer select-none ${
+                              isSelected
+                                ? 'border-2 border-rose-500 ring-2 ring-rose-500/20 bg-rose-500/10 touch-card-active'
+                                : isDarkMode
+                                ? 'bg-zinc-950 border-zinc-800 hover:border-zinc-600'
+                                : 'bg-white border-zinc-200 hover:border-zinc-400'
+                            }`}
+                          >
+                            <div className="relative aspect-square rounded-lg overflow-hidden bg-zinc-100 mb-1.5">
+                              <img
+                                src={item.image}
+                                alt={item.name}
+                                className="w-full h-full object-cover"
+                              />
+                              <span
+                                className={`absolute top-1 right-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold leading-none ${
+                                  isSelected
+                                    ? 'bg-rose-600 text-white'
+                                    : 'bg-black/65 text-white'
+                                }`}
+                              >
+                                {isSelected ? '선택됨 ✓' : item.category}
+                              </span>
+                            </div>
+                            <p className="text-[10px] font-bold truncate">
+                              {item.name}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 로딩 상태 */}
+                {isGenerating && (
+                  <div
+                    className={`rounded-2xl border p-12 text-center flex flex-col items-center justify-center min-h-[340px] ${
+                      isDarkMode
+                        ? 'bg-zinc-900 border-zinc-800 text-zinc-100'
+                        : 'bg-white border-zinc-200 text-zinc-900'
+                    }`}
+                  >
+                    <div className="w-12 h-12 border-4 border-zinc-200 border-t-rose-500 rounded-full animate-spin mb-4" />
+                    <p className="text-sm font-bold">{loadingTitle}</p>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      AI 가상 피팅 화보 생성 및 KREAM·무신사 매칭 아이템 디깅 진행
+                      중
+                    </p>
+                  </div>
+                )}
+
+                {/* AI 스타일링 결과 카드 */}
+                {stylistResult && !isGenerating && (
+                  <div
+                    className={`rounded-2xl border overflow-hidden shadow-sm space-y-6 p-5 sm:p-6 transition-colors ${
+                      isDarkMode
+                        ? 'bg-zinc-900 border-zinc-800 text-zinc-100'
+                        : 'bg-white border-zinc-200 text-zinc-900'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200/50 pb-4">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-zinc-900 text-white">
+                            {stylistResult.genreTag}
+                          </span>
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600">
+                            {stylistResult.apiBadge}
+                          </span>
+                        </div>
+                        <h3 className="text-lg sm:text-xl font-bold mt-2">
+                          {stylistResult.title}
+                        </h3>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => generateAIOutfit()}
+                          className="px-3 py-2 rounded-xl border border-zinc-300 text-xs font-semibold hover:opacity-80 transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" /> 다시 생성
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveCurrentLook}
+                          className="px-3.5 py-2 rounded-xl bg-rose-600 text-white text-xs font-semibold hover:bg-rose-500 transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Bookmark className="w-3.5 h-3.5" /> 룩북에 저장
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-stretch">
+                      <div
+                        className={`md:col-span-5 relative rounded-xl overflow-hidden min-h-[340px] border flex flex-col justify-between p-4 ${
+                          isDarkMode
+                            ? 'bg-gradient-to-b from-zinc-950 via-zinc-900 to-rose-950/40 border-rose-900/50'
+                            : 'bg-gradient-to-b from-stone-100 to-zinc-200/70 border-zinc-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between z-10">
+                          <span className="px-2 py-0.5 rounded bg-black/80 text-white text-[10px] font-semibold backdrop-blur-sm flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />{' '}
+                            Virtual Try-On 화보
+                          </span>
+                          <span className="text-[10px] font-mono text-zinc-600 bg-white/85 px-1.5 py-0.5 rounded">
+                            AURAFIT #26
+                          </span>
+                        </div>
+
+                        {/* 화보 콜라주 캔버스 */}
+                        {(() => {
+                          const pItems = stylistResult.items;
+                          const topItem =
+                            pItems.find((i) => i.category === '상의') ||
+                            pItems[0];
+                          const outerItem = pItems.find(
+                            (i) => i.category === '아우터'
+                          );
+                          const bottomItem =
+                            pItems.find((i) => i.category === '하의') ||
+                            pItems[1];
+                          const shoeItem = pItems.find(
+                            (i) => i.category === '신발'
+                          );
+                          const accItem = pItems.find(
+                            (i) => i.category === '악세사리'
+                          );
+                          return (
+                            <div className="my-auto relative w-full max-w-[230px] mx-auto py-2 flex flex-col items-center">
+                              <div
+                                className={`w-10 h-10 rounded-full flex items-center justify-center text-[10px] font-editorial italic mb-1 shadow-sm ${
+                                  isDarkMode
+                                    ? 'bg-rose-500/20 border border-rose-500/50 text-rose-300'
+                                    : 'bg-zinc-900 text-white'
+                                }`}
+                              >
+                                {isDarkMode ? 'DARK' : 'LOOK'}
+                              </div>
+                              <div className="flex items-center justify-center -space-x-3 z-10">
+                                {topItem && (
+                                  <div
+                                    className={`w-24 h-24 rounded-2xl overflow-hidden border-2 shadow-md transform -rotate-3 bg-white ${
+                                      isDarkMode
+                                        ? 'border-zinc-700'
+                                        : 'border-white'
+                                    }`}
+                                  >
+                                    <img
+                                      src={topItem.image}
+                                      alt={topItem.name}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </div>
+                                )}
+                                {outerItem &&
+                                  (!topItem || outerItem.id !== topItem.id) && (
+                                    <div
+                                      className={`w-24 h-24 rounded-2xl overflow-hidden border-2 shadow-lg transform rotate-3 z-10 bg-white ${
+                                        isDarkMode
+                                          ? 'border-rose-500/60'
+                                          : 'border-zinc-900'
+                                      }`}
+                                    >
+                                      <img
+                                        src={outerItem.image}
+                                        alt={outerItem.name}
+                                        className="w-full h-full object-cover"
+                                      />
+                                    </div>
+                                  )}
+                              </div>
+                              {bottomItem &&
+                                (!topItem || bottomItem.id !== topItem.id) && (
+                                  <div
+                                    className={`w-24 h-28 rounded-2xl overflow-hidden border-2 shadow-md -mt-2 z-20 bg-white ${
+                                      isDarkMode
+                                        ? 'border-zinc-700'
+                                        : 'border-white'
+                                    }`}
+                                  >
+                                    <img
+                                      src={bottomItem.image}
+                                      alt={bottomItem.name}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </div>
+                                )}
+                              <div className="flex items-center justify-center gap-2 -mt-2 z-30">
+                                {shoeItem && (
+                                  <div
+                                    className={`w-16 h-16 rounded-xl overflow-hidden border-2 shadow-md bg-white ${
+                                      isDarkMode
+                                        ? 'border-zinc-700'
+                                        : 'border-white'
+                                    }`}
+                                  >
+                                    <img
+                                      src={shoeItem.image}
+                                      alt={shoeItem.name}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </div>
+                                )}
+                                {accItem && (
+                                  <div
+                                    className={`w-14 h-14 rounded-xl overflow-hidden border-2 shadow-md bg-white ${
+                                      isDarkMode
+                                        ? 'border-rose-500/50'
+                                        : 'border-zinc-300'
+                                    }`}
+                                  >
+                                    <img
+                                      src={accItem.image}
+                                      alt={accItem.name}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                              <span
+                                className={`mt-2.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                                  isDarkMode
+                                    ? 'bg-rose-950 text-rose-300'
+                                    : 'bg-zinc-900 text-white'
+                                }`}
+                              >
+                                {stylistResult.genre} 실루엣 매칭 완료
+                              </span>
+                            </div>
+                          );
+                        })()}
+
+                        <div className="z-10 bg-white/95 backdrop-blur-md rounded-lg p-2.5 text-[11px] text-zinc-700 border border-zinc-200/60">
+                          <p className="font-semibold text-zinc-900">
+                            ✨ 원터치 조합 실루엣 분석
+                          </p>
+                          <p className="text-[10px] text-zinc-500 mt-0.5">
+                            상·하의 기장 밸런스 및 레이어드 톤앤매너 최적화 완료
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-7 flex flex-col justify-between space-y-4">
+                        <div
+                          className={`p-4 rounded-xl border space-y-2 ${
+                            isDarkMode
+                              ? 'bg-zinc-950 border-zinc-800 text-zinc-100'
+                              : 'bg-zinc-50 border-zinc-200/70 text-zinc-900'
+                          }`}
+                        >
+                          <p className="text-xs font-bold flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-rose-500" /> AI
+                            크리에이티브 디렉터 스타일링 노트
+                          </p>
+                          <p className="text-xs leading-relaxed opacity-85">
+                            {stylistResult.note}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-xs font-bold mb-2">
+                            이번 코디에 착용된 내 옷장 아이템
+                          </p>
+                          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
+                            {stylistResult.items.map((item) => (
+                              <div
+                                key={item.id}
+                                className={`relative rounded-xl border p-2 text-center ${
+                                  item.status === '구매 예정'
+                                    ? 'border-amber-400 bg-amber-500/10'
+                                    : isDarkMode
+                                    ? 'bg-zinc-950 border-zinc-800'
+                                    : 'bg-zinc-50 border-zinc-200/80'
+                                }`}
+                              >
+                                {item.status === '구매 예정' && (
+                                  <span className="block text-[9px] font-bold text-amber-500 mb-0.5">
+                                    ✨ 위시템
+                                  </span>
+                                )}
+                                <img
+                                  src={item.image}
+                                  alt={item.name}
+                                  className="w-full h-14 object-cover rounded-lg mb-1 bg-white"
+                                />
+                                <p className="text-[10px] font-semibold truncate">
+                                  {item.name}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 외부 쇼핑몰 추천 아이템 */}
+                    <div className="border-t border-zinc-200/60 pt-5 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-rose-500">
+                            Complete the Look · 부족한 10% 채우기
+                          </span>
+                          <h4 className="text-sm font-bold">
+                            이 코디의 완성도를 높여줄 외부 쇼핑몰 추천 아이템
+                          </h4>
+                        </div>
+                        <span className="text-[11px] text-zinc-400">
+                          {stylistResult.filterSummary}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                        {stylistResult.suggestions.map((sug, idx) => {
+                          const encodedQuery = encodeURIComponent(sug.name);
+                          const platformUrls: Record<string, string> = {
+                            KREAM: `https://kream.co.kr/search?keyword=${encodedQuery}`,
+                            무신사: `https://www.musinsa.com/search/musinsa/integration?q=${encodedQuery}`,
+                            에이블리: `https://m.a-bly.com/search?keyword=${encodedQuery}`,
+                            '네이버 쇼핑': `https://search.shopping.naver.com/search/all?query=${encodedQuery}`,
+                          };
+                          return (
+                            <div
+                              key={idx}
+                              className={`rounded-xl border p-3.5 flex flex-col justify-between gap-3 ${
+                                isDarkMode
+                                  ? 'bg-zinc-950 border-zinc-800'
+                                  : 'bg-zinc-50/80 border-zinc-200'
+                              }`}
+                            >
+                              <div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-rose-500/10 text-rose-500">
+                                    {sug.tag || budget}
+                                  </span>
+                                  <span className="text-[10px] text-zinc-400">
+                                    AI 매칭 추천
+                                  </span>
+                                </div>
+                                <p className="text-xs font-bold mt-1.5">
+                                  {sug.name}
+                                </p>
+                                <p className="text-[11px] text-zinc-500 mt-0.5">
+                                  {sug.reason}
+                                </p>
+                              </div>
+                              <div className="pt-2 border-t border-zinc-200/40">
+                                <p className="text-[10px] text-zinc-400 mb-1.5">
+                                  선택한 쇼핑몰에서 바로 최저가/매물 비교:
+                                </p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {platformsToRender.map((plat) => {
+                                    let btnStyle =
+                                      'bg-zinc-800 text-white hover:bg-zinc-700';
+                                    if (plat === 'KREAM')
+                                      btnStyle =
+                                        'bg-zinc-950 text-emerald-400 border border-emerald-500/40 hover:bg-zinc-900';
+                                    if (plat === '에이블리')
+                                      btnStyle =
+                                        'bg-rose-500 text-white hover:bg-rose-600';
+                                    if (plat === '네이버 쇼핑')
+                                      btnStyle =
+                                        'bg-emerald-600 text-white hover:bg-emerald-700';
+
+                                    return (
+                                      <a
+                                        key={plat}
+                                        href={platformUrls[plat]}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition inline-flex items-center gap-1 ${btnStyle}`}
+                                      >
+                                        {plat}{' '}
+                                        <ExternalLink className="w-2.5 h-2.5" />
+                                      </a>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* TAB 3: 남의 옷장 코디 & 유저 프로필 */}
+        {currentTab === 'community' && (
+          <section className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wider text-rose-500">
+                  One-Tap Open Closet & User Profiles
+                </span>
+                <h2 className="text-2xl sm:text-3xl font-bold tracking-tight mt-0.5">
+                  남의 옷장 코디해주기 & 유저 프로필
+                </h2>
+                <p className="text-xs sm:text-sm text-zinc-500 mt-1">
+                  다른 유저의 옷장을 열어{' '}
+                  <strong className="font-semibold">
+                    마음에 드는 옷들을 톡톡 터치해 골라주고
+                  </strong>{' '}
+                  코디 제안서를 보내보세요!
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => openUserProfileModal('me', 'closet')}
+                className={`px-4 py-2.5 rounded-xl text-white text-xs font-bold transition flex items-center gap-2 cursor-pointer self-start sm:self-auto ${
+                  isDarkMode
+                    ? 'bg-rose-600 hover:bg-rose-500'
+                    : 'bg-zinc-900 hover:opacity-90'
+                }`}
+              >
+                <Inbox className="w-4 h-4" /> 내 오픈 옷장 & 받은 코디 제안함 보기
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+              {communityUsers
+                .filter((u) => u.id !== 'me')
+                .map((user) => (
+                  <div
+                    key={user.id}
+                    className={`rounded-2xl border p-5 flex flex-col justify-between gap-4 transition-all ${
+                      isDarkMode
+                        ? 'bg-zinc-900 border-zinc-800 hover:border-rose-500/50'
+                        : 'bg-white border-zinc-200 hover:shadow-md'
+                    }`}
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div
+                          onClick={() => openUserProfileModal(user.id, 'closet')}
+                          className="flex items-center gap-2.5 cursor-pointer"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-zinc-800 text-white flex items-center justify-center text-xs font-bold">
+                            {user.handle.slice(1, 3).toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold hover:underline">
+                              {user.handle}
+                            </p>
+                            <p className="text-[10px] text-zinc-400">
+                              {user.badge}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-500 font-bold">
+                          받은 제안 {user.proposals.length}건
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1">
+                        {user.dna.map((tag) => (
+                          <span
+                            key={tag}
+                            className={`text-[10px] px-2 py-0.5 rounded-md ${
+                              isDarkMode
+                                ? 'bg-zinc-800 text-zinc-300'
+                                : 'bg-zinc-100 text-zinc-600'
+                            }`}
+                          >
+                            #{tag}
+                          </span>
+                        ))}
+                      </div>
+
+                      <p
+                        className={`text-xs leading-relaxed p-3 rounded-xl ${
+                          isDarkMode
+                            ? 'bg-zinc-950 text-zinc-300'
+                            : 'bg-zinc-50 text-zinc-600'
+                        }`}
+                      >
+                        &ldquo;{user.request}&rdquo;
+                      </p>
+
+                      <div>
+                        <p className="text-[10px] font-semibold text-zinc-400 mb-1.5">
+                          오픈 옷장 미리보기 ({user.closet.length}벌)
+                        </p>
+                        <div className="grid grid-cols-4 gap-1.5">
+                          {user.closet.slice(0, 4).map((c) => (
+                            <img
+                              key={c.id}
+                              src={c.image}
+                              alt={c.name}
+                              title={c.name}
+                              className="w-full h-14 object-cover rounded-lg border border-zinc-200/30 bg-zinc-100"
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openUserProfileModal(user.id, 'closet')}
+                        className={`py-2.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
+                          isDarkMode
+                            ? 'border-zinc-700 text-zinc-200 hover:bg-zinc-800'
+                            : 'border-zinc-300 text-zinc-800 hover:bg-zinc-100'
+                        }`}
+                      >
+                        프로필·옷장 상세
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openUserProfileModal(user.id, 'style')}
+                        className={`py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+                          isDarkMode
+                            ? 'bg-rose-600 text-white hover:bg-rose-500'
+                            : 'bg-zinc-900 text-white hover:opacity-90'
+                        }`}
+                      >
+                        <Wand2 className="w-3.5 h-3.5" /> 터치로 코디 짜주기
+                      </button>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </section>
+        )}
+
+        {/* TAB 4: 저장된 룩북 */}
+        {currentTab === 'saved' && (
+          <section className="space-y-6">
+            <div>
+              <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                Lookbook Archive
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight mt-0.5">
+                저장된 코디 아카이브
+              </h2>
+              <p className="text-xs sm:text-sm text-zinc-500 mt-1">
+                내가 원터치로 만든 코디나 다른 유저에게 제안받아 채택한 코디
+                목록입니다.
+              </p>
+            </div>
+
+            {savedLooks.length === 0 ? (
+              <div className="text-center py-12 text-xs text-zinc-400">
+                아직 저장된 코디가 없습니다. 원터치 코디나 받은 제안함에서 마음에
+                드는 룩을 저장해 보세요.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                {savedLooks.map((look) => (
+                  <div
+                    key={look.id}
+                    className={`rounded-2xl border p-4 space-y-3 ${
+                      isDarkMode
+                        ? 'bg-zinc-900 border-zinc-800'
+                        : 'bg-white border-zinc-200 shadow-sm'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          look.mode === 'NIGHT'
+                            ? 'bg-rose-950 text-rose-400'
+                            : 'bg-zinc-100 text-zinc-700'
+                        }`}
+                      >
+                        {look.mode} · {look.genre}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSavedLooks((prev) =>
+                            prev.filter((l) => l.id !== look.id)
+                          )
+                        }
+                        className="text-[11px] text-zinc-400 hover:text-rose-500 cursor-pointer"
+                      >
+                        삭제
+                      </button>
+                    </div>
+                    <h4 className="text-sm font-bold">{look.title}</h4>
+                    <div className="grid grid-cols-3 gap-2">
+                      {look.items.slice(0, 3).map((i) => (
+                        <img
+                          key={i.id}
+                          src={i.image}
+                          alt={i.name}
+                          className="w-full h-20 object-cover rounded-lg bg-zinc-100"
+                        />
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-zinc-500 line-clamp-3">
+                      {look.note}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+      </main>
+
+      {/* FLOATING BANNER: 매거진 복귀 감지 코디 제안 배너 */}
+      {returnBannerOpen && currentArticle && (
+        <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:max-w-md z-50 rounded-2xl bg-zinc-950 text-white border border-zinc-700/80 p-4 shadow-2xl animate-slide-up">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div className="flex-1 space-y-2.5">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400">
+                  Magazine-to-Closet AI
+                </span>
+                <p className="text-xs leading-relaxed text-zinc-200 mt-0.5">
+                  방금 읽으신{' '}
+                  <strong>
+                    &lsquo;{currentArticle.headline.slice(0, 22)}...&rsquo;
+                  </strong>{' '}
+                  속 핵심 아이템(
+                  <span className="text-rose-400 font-semibold">
+                    {currentArticle.keyItems.slice(0, 2).join(', ')}
+                  </span>
+                  )을 활용해 내 옷장 코디를 추천해 드릴까요?
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReturnBannerOpen(false);
+                    const mood = `${currentArticle.keyItems.join(
+                      ' + '
+                    )} 매거진 무드`;
+                    setCustomMood(mood);
+                    setCurrentTab('stylist');
+                    const ids =
+                      validSelectedIds.length > 0
+                        ? validSelectedIds
+                        : autoTouchSelectOutfit();
+                    generateAIOutfit(mood, ids);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition cursor-pointer"
+                >
+                  네, 원터치로 코디 생성하기
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReturnBannerOpen(false)}
+                  className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium transition cursor-pointer"
+                >
+                  닫기
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 1: 인앱 매거진 리더 모달 */}
+      {magazineModalOpen && currentArticle && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div
+            className={`rounded-2xl max-w-xl w-full p-6 sm:p-7 space-y-5 shadow-2xl max-h-[90vh] overflow-y-auto ${
+              isDarkMode
+                ? 'bg-zinc-900 text-zinc-100 border border-rose-900/50'
+                : 'bg-white text-zinc-900'
+            }`}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-200/70 pb-3">
+              <span
+                className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full text-white ${
+                  isDarkMode ? 'bg-rose-600' : 'bg-zinc-900'
+                }`}
+              >
+                {currentArticle.tag}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setMagazineModalOpen(false);
+                  setReturnBannerOpen(true);
+                }}
+                className="p-2 rounded-xl hover:bg-zinc-100/50 text-zinc-500 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[11px] font-mono text-zinc-400">
+                AURAFIT EDITORIAL ARCHIVE · 2026
+              </p>
+              <h3 className="text-xl sm:text-2xl font-bold leading-snug font-editorial">
+                {currentArticle.headline}
+              </h3>
+            </div>
+
+            <div
+              className={`text-xs sm:text-sm leading-relaxed space-y-3 p-4 rounded-xl border ${
+                isDarkMode
+                  ? 'text-zinc-300 bg-zinc-950 border-zinc-800'
+                  : 'text-zinc-600 bg-zinc-50 border-zinc-200/60'
+              }`}
+            >
+              <p>{currentArticle.summary}</p>
+            </div>
+
+            <div>
+              <p className="text-xs font-bold mb-2">
+                📌 기사 속 핵심 스타일링 키워드 & 아이템
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {currentArticle.keyItems.map((item) => (
+                  <span
+                    key={item}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                      isDarkMode
+                        ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
+                        : 'bg-zinc-100 text-zinc-800 border-zinc-200'
+                    }`}
+                  >
+                    # {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-zinc-200/70 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+              <a
+                href={`https://www.google.com/search?q=${encodeURIComponent(
+                  currentArticle.searchQuery
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setVisitedExternalMag(true)}
+                className="px-4 py-3 rounded-xl border border-zinc-300 text-xs font-semibold text-center hover:opacity-80 transition inline-flex items-center justify-center gap-1.5"
+              >
+                외부 매거진 검색으로 이동{' '}
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMagazineModalOpen(false);
+                  setReturnBannerOpen(true);
+                }}
+                className="px-5 py-3 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-500 transition cursor-pointer"
+              >
+                기사 닫고 내 옷장에 적용하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: 새 의류 등록 모달 */}
+      {uploadModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white text-zinc-900 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold">내 옷장에 새 아이템 추가</h3>
+                <p className="text-[11px] text-zinc-400">
+                  직접 찍은 사진이나 무신사·KREAM 상품 링크로 간편 등록하세요.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setUploadModalOpen(false);
+                  setUrlPreview(null);
+                  setShopUrlInput('');
+                }}
+                className="p-1.5 rounded-lg hover:bg-zinc-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-zinc-100">
+              <button
+                type="button"
+                onClick={() => setUploadMethod('photo')}
+                className={`py-2 rounded-lg text-xs transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                  uploadMethod === 'photo'
+                    ? 'font-bold bg-white text-zinc-900 shadow-sm'
+                    : 'font-medium text-zinc-500 hover:text-zinc-900'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" /> 사진 직접 업로드
+              </button>
+              <button
+                type="button"
+                onClick={() => setUploadMethod('url')}
+                className={`py-2 rounded-lg text-xs transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                  uploadMethod === 'url'
+                    ? 'font-bold bg-white text-zinc-900 shadow-sm'
+                    : 'font-medium text-zinc-500 hover:text-zinc-900'
+                }`}
+              >
+                <Link2 className="w-3.5 h-3.5" /> 쇼핑몰 링크(URL) 등록
+              </button>
+            </div>
+
+            {uploadMethod === 'photo' ? (
+              <form onSubmit={handleClothUploadSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold mb-1.5">
+                    의류 사진 선택
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    required
+                    onChange={handlePhotoFileChange}
+                    className="w-full text-xs text-zinc-500 file:mr-3 file:py-2 file:px-3.5 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-zinc-900 file:text-white hover:file:bg-zinc-700 cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold mb-1.5">
+                    아이템 이름
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={photoName}
+                    onChange={(e) => setPhotoName(e.target.value)}
+                    placeholder="예: 빈티지 워싱 와이드 데님"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block text-xs font-semibold mb-1.5">
+                      카테고리
+                    </label>
+                    <select
+                      value={photoCategory}
+                      onChange={(e) =>
+                        setPhotoCategory(e.target.value as CategoryType)
+                      }
+                      className="w-full px-2.5 py-2.5 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none"
+                    >
+                      <option value="상의">상의</option>
+                      <option value="하의">하의</option>
+                      <option value="아우터">아우터</option>
+                      <option value="신발">신발</option>
+                      <option value="악세사리">악세사리</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold mb-1.5">
+                      계절감
+                    </label>
+                    <select
+                      value={photoSeason}
+                      onChange={(e) => setPhotoSeason(e.target.value)}
+                      className="w-full px-2.5 py-2.5 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none"
+                    >
+                      <option value="사계절">사계절</option>
+                      <option value="봄/가을">봄/가을</option>
+                      <option value="여름">여름</option>
+                      <option value="겨울">겨울</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold mb-1.5">
+                      상태
+                    </label>
+                    <select
+                      value={photoStatus}
+                      onChange={(e) =>
+                        setPhotoStatus(e.target.value as ClothStatus)
+                      }
+                      className="w-full px-2.5 py-2.5 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none"
+                    >
+                      <option value="보유 중">보유 중</option>
+                      <option value="구매 예정">구매 예정</option>
+                    </select>
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  className="w-full py-3 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 transition cursor-pointer"
+                >
+                  옷장에 영구 등록하기
+                </button>
+              </form>
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold">
+                    상품 페이지 URL 붙여넣기 (무신사, KREAM, 에이블리, 29CM, 자라
+                    등)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      value={shopUrlInput}
+                      onChange={(e) => setShopUrlInput(e.target.value)}
+                      placeholder="https://www.musinsa.com/products/..."
+                      className="flex-1 px-3.5 py-2.5 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
+                    />
+                    <button
+                      type="button"
+                      disabled={isFetchingUrl}
+                      onClick={() => fetchUrlMetadata()}
+                      className="px-3.5 py-2.5 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 transition shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      {isFetchingUrl ? '추출 중...' : '불러오기'}
+                    </button>
+                  </div>
+
+                  <div className="pt-1">
+                    <p className="text-[10px] text-zinc-400 mb-1.5">
+                      💡 원터치 쇼핑몰 링크 추출 테스트:
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => fetchUrlMetadata(sampleUrlCatalog.musinsa)}
+                        className="px-2.5 py-1 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-[10px] font-semibold text-zinc-700 transition cursor-pointer"
+                      >
+                        무신사 · 빈티지 피그먼트 볼캡
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fetchUrlMetadata(sampleUrlCatalog.kream)}
+                        className="px-2.5 py-1 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-[10px] font-semibold text-emerald-400 transition cursor-pointer"
+                      >
+                        KREAM · 릭 오웬스 플랫폼 부츠
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fetchUrlMetadata(sampleUrlCatalog.zara)}
+                        className="px-2.5 py-1 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-[10px] font-semibold text-zinc-700 transition cursor-pointer"
+                      >
+                        ZARA · 크롭 레더 바이커 자켓
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          fetchUrlMetadata(sampleUrlCatalog['29cm'])
+                        }
+                        className="px-2.5 py-1 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-[10px] font-semibold text-zinc-700 transition cursor-pointer"
+                      >
+                        29CM · 르메르 스타일 크루아상 백
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {urlPreview && (
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3.5 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={urlPreview.image}
+                        alt="상품 썸네일"
+                        className="w-16 h-20 object-cover rounded-lg border border-zinc-200 bg-white shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="px-2 py-0.5 rounded bg-zinc-900 text-white text-[10px] font-bold">
+                            {urlPreview.store}
+                          </span>
+                          <span className="text-[10px] text-emerald-600 font-semibold">
+                            ✓ 서버 메타데이터 & 카테고리 자동 인식
+                          </span>
+                        </div>
+                        <input
+                          type="text"
+                          value={urlPreview.name}
+                          onChange={(e) =>
+                            setUrlPreview({
+                              ...urlPreview,
+                              name: e.target.value,
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-900 text-xs font-bold focus:outline-none"
+                        />
+                        <p className="text-[11px] text-zinc-500">
+                          상품 정보 추출 완료 · {urlPreview.price}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                          카테고리
+                        </label>
+                        <select
+                          value={urlPreview.category}
+                          onChange={(e) =>
+                            setUrlPreview({
+                              ...urlPreview,
+                              category: e.target.value as CategoryType,
+                            })
+                          }
+                          className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-900 text-xs"
+                        >
+                          <option value="상의">상의</option>
+                          <option value="하의">하의</option>
+                          <option value="아우터">아우터</option>
+                          <option value="신발">신발</option>
+                          <option value="악세사리">악세사리</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                          계절감
+                        </label>
+                        <select
+                          value={urlPreview.season}
+                          onChange={(e) =>
+                            setUrlPreview({
+                              ...urlPreview,
+                              season: e.target.value,
+                            })
+                          }
+                          className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-900 text-xs"
+                        >
+                          <option value="사계절">사계절</option>
+                          <option value="봄/가을">봄/가을</option>
+                          <option value="여름">여름</option>
+                          <option value="겨울">겨울</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                          등록 상태
+                        </label>
+                        <select
+                          value={urlStatus}
+                          onChange={(e) =>
+                            setUrlStatus(e.target.value as ClothStatus)
+                          }
+                          className="w-full px-2 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 font-semibold text-xs"
+                        >
+                          <option value="구매 예정">
+                            ✨ 구매 예정 (시뮬레이션)
+                          </option>
+                          <option value="보유 중">✅ 이미 보유 중</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={confirmUrlClothUpload}
+                      className="w-full py-3 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 transition cursor-pointer"
+                    >
+                      이 상품 내 옷장에 추가하기
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: 유저 프로필 & 오픈 옷장 코디 모달 */}
+      {profileModalOpen && activeProfileUser && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5">
+          <div
+            className={`rounded-2xl max-w-4xl w-full p-5 sm:p-7 space-y-5 shadow-2xl max-h-[92vh] overflow-y-auto ${
+              isDarkMode
+                ? 'bg-zinc-900 text-zinc-100 border border-zinc-800'
+                : 'bg-white text-zinc-900'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-200/80 pb-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-14 h-14 rounded-2xl bg-zinc-900 text-white flex items-center justify-center text-lg font-bold shrink-0">
+                  {activeProfileUser.handle.slice(1, 3).toUpperCase()}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-lg sm:text-xl font-bold">
+                      {activeProfileUser.handle}
+                    </h3>
+                    <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-rose-500/10 text-rose-500">
+                      {activeProfileUser.badge}
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    {activeProfileUser.request}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {activeProfileUser.dna.map((tag) => (
+                      <span
+                        key={tag}
+                        className={`text-[10px] font-semibold px-2.5 py-0.5 rounded-full ${
+                          isDarkMode
+                            ? 'bg-zinc-800 text-zinc-300'
+                            : 'bg-zinc-100 text-zinc-700'
+                        }`}
+                      >
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 self-end sm:self-center">
+                <div className="text-center px-3 py-1.5 rounded-xl bg-zinc-100 text-zinc-800">
+                  <p className="text-[10px] text-zinc-500">보유 의류</p>
+                  <p className="text-sm font-bold">
+                    {activeProfileUser.closet.length}벌
+                  </p>
+                </div>
+                <div className="text-center px-3 py-1.5 rounded-xl bg-rose-50 text-rose-600">
+                  <p className="text-[10px]">받은 코디 제안</p>
+                  <p className="text-sm font-bold">
+                    {activeProfileUser.proposals.length}건
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setProfileModalOpen(false)}
+                  className="p-2 rounded-xl hover:bg-zinc-100/50 text-zinc-500 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 border-b border-zinc-200/80 pb-2 overflow-x-auto no-scrollbar">
+              {[
+                {
+                  id: 'closet' as ProfileSubTab,
+                  icon: Grid,
+                  label: '전체 옷장 구경',
+                },
+                {
+                  id: 'style' as ProfileSubTab,
+                  icon: Wand2,
+                  label: '원터치로 이 옷장 코디 짜주기',
+                },
+                {
+                  id: 'inbox' as ProfileSubTab,
+                  icon: Inbox,
+                  label: `받은 코디 제안함 (${activeProfileUser.proposals.length})`,
+                },
+              ].map((st) => {
+                const Icon = st.icon;
+                const active = profileSubTab === st.id;
+                return (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => setProfileSubTab(st.id)}
+                    className={`px-3.5 py-2 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                      active
+                        ? isDarkMode
+                          ? 'font-bold bg-rose-600 text-white'
+                          : 'font-bold bg-zinc-900 text-white'
+                        : isDarkMode
+                        ? 'font-semibold text-zinc-400 hover:bg-zinc-800'
+                        : 'font-semibold text-zinc-600 hover:bg-zinc-100'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" /> {st.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {profileSubTab === 'closet' && (
+              <div className="space-y-4">
+                <div
+                  className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 flex-wrap ${
+                    isDarkMode
+                      ? 'bg-zinc-950 border-zinc-800'
+                      : 'bg-zinc-50 border-zinc-200/70'
+                  }`}
+                >
+                  <p
+                    className={`text-xs font-medium ${
+                      isDarkMode ? 'text-zinc-300' : 'text-zinc-700'
+                    }`}
+                  >
+                    💬 스타일 요청: &ldquo;{activeProfileUser.request}&rdquo;
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setProfileSubTab('style')}
+                    className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-500 transition shrink-0 cursor-pointer"
+                  >
+                    지금 터치로 코디 조합해주기 →
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+                  {activeProfileUser.closet.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => {
+                        setProfileSubTab('style');
+                        toggleProposalItem(item.id);
+                      }}
+                      className={`rounded-xl border p-2.5 cursor-pointer transition ${
+                        isDarkMode
+                          ? 'bg-zinc-950 border-zinc-800 hover:border-rose-500'
+                          : 'bg-white border-zinc-200 hover:border-zinc-900'
+                      }`}
+                    >
+                      <div className="relative aspect-square rounded-lg overflow-hidden bg-zinc-100 mb-2">
+                        <img
+                          src={item.image}
+                          alt={item.name}
+                          className="w-full h-full object-cover"
+                        />
+                        <span className="absolute bottom-1.5 left-1.5 px-2 py-0.5 rounded bg-black/75 text-white text-[10px] font-bold">
+                          {item.category}
+                        </span>
+                      </div>
+                      <p className="text-xs font-bold truncate">{item.name}</p>
+                      <p className="text-[10px] text-rose-500 font-semibold mt-0.5">
+                        터치하여 이 옷으로 코디 짜주기 →
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {profileSubTab === 'style' && (
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
+                <div className="md:col-span-7 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold">
+                      1. 조합할 아이템을 톡 터치해 선택하세요 (2개 이상)
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setProposalSelectedIds([])}
+                      className="text-[11px] text-zinc-400 hover:text-rose-500 cursor-pointer"
+                    >
+                      선택 초기화
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[340px] overflow-y-auto p-1">
+                    {activeProfileUser.closet.map((item) => {
+                      const isSel = proposalSelectedIds.includes(item.id);
+                      return (
+                        <div
+                          key={item.id}
+                          onClick={() => toggleProposalItem(item.id)}
+                          className={`cursor-pointer rounded-xl border-2 p-2 transition-all select-none ${
+                            isSel
+                              ? 'border-rose-500 bg-rose-500/10 touch-card-active'
+                              : isDarkMode
+                              ? 'border-zinc-800 bg-zinc-950 hover:border-zinc-600'
+                              : 'border-zinc-200 bg-white hover:border-zinc-400'
+                          }`}
+                        >
+                          <div className="relative">
+                            <img
+                              src={item.image}
+                              alt={item.name}
+                              className="w-full h-20 object-cover rounded-lg mb-1.5 bg-zinc-100"
+                            />
+                            <span
+                              className={`absolute top-1 right-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold leading-none ${
+                                isSel
+                                  ? 'bg-rose-600 text-white'
+                                  : 'bg-black/65 text-white'
+                              }`}
+                            >
+                              {isSel ? '선택됨 ✓' : '터치'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] font-bold truncate">
+                            {item.name}
+                          </p>
+                          <p
+                            className={`text-[10px] ${
+                              isSel ? 'text-rose-500 font-bold' : 'text-zinc-400'
+                            }`}
+                          >
+                            {item.category}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div
+                  className={`md:col-span-5 rounded-xl border p-4 flex flex-col justify-between space-y-4 ${
+                    isDarkMode
+                      ? 'border-zinc-800 bg-zinc-950'
+                      : 'border-zinc-200 bg-zinc-50'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-rose-500">
+                        ONE-TAP PROPOSAL TRAY
+                      </span>
+                      <span className="text-[11px] font-bold text-zinc-500">
+                        {proposalSelectedIds.length}개 선택됨
+                      </span>
+                    </div>
+                    <div
+                      className={`mt-2 min-h-[140px] rounded-xl border border-dashed flex items-center justify-center p-3 overflow-hidden ${
+                        isDarkMode
+                          ? 'border-zinc-700 bg-zinc-900'
+                          : 'border-zinc-300 bg-white'
+                      }`}
+                    >
+                      {proposalSelectedIds.length === 0 ? (
+                        <p className="text-xs text-zinc-400 text-center">
+                          좌측 옷장 카드를 터치하면
+                          <br />
+                          여기에 코디 조합이 자동으로 담깁니다.
+                        </p>
+                      ) : (
+                        <div className="flex flex-wrap items-center justify-center gap-2">
+                          {activeProfileUser.closet
+                            .filter((c) => proposalSelectedIds.includes(c.id))
+                            .map((it) => (
+                              <div
+                                key={it.id}
+                                onClick={() => toggleProposalItem(it.id)}
+                                title="터치하여 제외"
+                                className="relative w-16 text-center cursor-pointer"
+                              >
+                                <img
+                                  src={it.image}
+                                  alt={it.name}
+                                  className="w-16 h-16 object-cover rounded-xl border-2 border-rose-500 shadow-sm bg-white mx-auto"
+                                />
+                                <span
+                                  className={`block text-[9px] font-bold truncate mt-1 ${
+                                    isDarkMode
+                                      ? 'text-zinc-300'
+                                      : 'text-zinc-700'
+                                  }`}
+                                >
+                                  {it.category}
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <div>
+                      <label className="block text-[11px] font-bold mb-1">
+                        제안자 닉네임
+                      </label>
+                      <input
+                        type="text"
+                        value={proposerName}
+                        onChange={(e) => setProposerName(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-white text-xs text-zinc-900 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold mb-1">
+                        스타일링 팁 & 추천 코멘트
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={proposalNote}
+                        onChange={(e) => setProposalNote(e.target.value)}
+                        placeholder="예: 이 블레이저 소매를 살짝 걷고 와이드 팬츠랑 매치하면 전시회 무드 딱 납니다!"
+                        className="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-white text-xs text-zinc-900 focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={submitOutfitProposal}
+                      className="w-full py-3 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-500 transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Send className="w-3.5 h-3.5" /> 코디 제안서 등록하기
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {profileSubTab === 'inbox' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {activeProfileUser.proposals.length === 0 ? (
+                  <div className="col-span-full py-12 text-center text-xs text-zinc-400">
+                    아직 도착한 코디 제안이 없습니다. 첫 번째 스타일리스트가
+                    되어보세요!
+                  </div>
+                ) : (
+                  activeProfileUser.proposals.map((prop) => {
+                    const matched = activeProfileUser.closet.filter((c) =>
+                      prop.itemIds.includes(c.id)
+                    );
+                    return (
+                      <div
+                        key={prop.id}
+                        className={`rounded-2xl border p-4 space-y-3 ${
+                          isDarkMode
+                            ? 'bg-zinc-950 border-zinc-800'
+                            : 'bg-zinc-50/70 border-zinc-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-500 text-[10px] font-bold">
+                              스타일 제안
+                            </span>
+                            <span className="text-xs font-bold">
+                              {prop.proposer}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-zinc-400">
+                            {prop.createdAt}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 overflow-x-auto py-1">
+                          {matched.map((it) => (
+                            <div
+                              key={it.id}
+                              className="shrink-0 w-16 text-center"
+                            >
+                              <img
+                                src={it.image}
+                                alt={it.name}
+                                className="w-16 h-16 object-cover rounded-lg border border-zinc-200 bg-white"
+                              />
+                              <p className="text-[9px] truncate mt-0.5 text-zinc-500">
+                                {it.name}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+
+                        <p
+                          className={`text-xs leading-relaxed p-3 rounded-xl ${
+                            isDarkMode
+                              ? 'bg-zinc-900 text-zinc-300'
+                              : 'bg-white text-zinc-700 border border-zinc-200/60'
+                          }`}
+                        >
+                          &ldquo;{prop.note}&rdquo;
+                        </p>
+
+                        <div className="flex items-center justify-between pt-1 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => likeProposal(prop.id)}
+                            className="px-3 py-1.5 rounded-lg border border-rose-200 text-rose-500 text-[11px] font-bold hover:bg-rose-500/10 transition cursor-pointer"
+                          >
+                            ♥ 공감 ({prop.likes || 0})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => adoptProposalToSaved(prop)}
+                            className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                              isDarkMode
+                                ? 'bg-rose-600 text-white hover:bg-rose-500'
+                                : 'bg-zinc-900 text-white hover:opacity-90'
+                            }`}
+                          >
+                            + 내 룩북에 채택/저장
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: 백엔드 DB & AI API 연동 스튜디오 */}
+      {apiModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white text-zinc-900 rounded-2xl max-w-2xl w-full p-6 space-y-5 shadow-2xl max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                  <Database className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold">
+                    실제 백엔드 DB(Supabase) & AI 가상 피팅 API 연동 스튜디오
+                  </h3>
+                  <p className="text-[11px] text-zinc-400">
+                    Vercel 서버 환경변수(`GEMINI_API_KEY`)와 자동 연동되며, 로컬
+                    백업 및 클라우드 설정을 관리합니다.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setApiModalOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-zinc-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200 space-y-2.5">
+              <div className="flex items-center justify-between flex-wrap gap-1">
+                <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />{' '}
+                  브라우저 영구 스토리지 + Next.js 서버 API 작동 중
+                </span>
+                <span className="text-[11px] font-semibold text-emerald-700">
+                  자동 동기화 활성화됨
+                </span>
+              </div>
+              <p className="text-[11px] text-emerald-800 leading-relaxed">
+                등록하신 의류 사진, 쇼핑몰 URL 위시템, 원터치 선택 슬롯, 코디
+                제안 내역이 자동 저장됩니다. JSON 파일로 백업·복원할 수 있습니다.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={exportDatabaseJson}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-800 text-xs font-semibold hover:bg-emerald-100 transition cursor-pointer flex items-center gap-1"
+                >
+                  <Download className="w-3.5 h-3.5" /> 내 옷장·코디 데이터 백업
+                  (JSON)
+                </button>
+                <label className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-800 text-xs font-semibold hover:bg-emerald-100 transition cursor-pointer flex items-center gap-1">
+                  <Upload className="w-3.5 h-3.5" /> JSON 데이터 복원
+                  <input
+                    type="file"
+                    accept=".json"
+                    onChange={importDatabaseJson}
+                    className="hidden"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={resetAllDatabase}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-rose-200 text-rose-600 text-xs font-semibold hover:bg-rose-50 transition cursor-pointer sm:ml-auto"
+                >
+                  초기 샘플 상태로 리셋
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-3 border-t border-zinc-200 pt-4">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-rose-500" /> AI 스타일링 &
+                실사 가상 피팅 API 연결 (선택)
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-600 mb-1">
+                    개인 테스트용 Gemini API Key (정식 운영 시 Vercel 환경변수
+                    권장)
+                  </label>
+                  <input
+                    type="password"
+                    value={cfgForm.geminiKey}
+                    onChange={(e) =>
+                      setCfgForm({ ...cfgForm, geminiKey: e.target.value })
+                    }
+                    placeholder="비워두면 서버 환경변수 또는 무료 내장 엔진 사용"
+                    className="w-full px-3 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-600 mb-1">
+                    FASHN AI / Fal.ai API Key (실사 모델 착용샷 생성)
+                  </label>
+                  <input
+                    type="password"
+                    value={cfgForm.fashnKey}
+                    onChange={(e) =>
+                      setCfgForm({ ...cfgForm, fashnKey: e.target.value })
+                    }
+                    placeholder="fa-... 또는 fal_key..."
+                    className="w-full px-3 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-zinc-400">
+                * Vercel 대시보드의 Environment Variables에{' '}
+                <strong>GEMINI_API_KEY</strong>를 등록해 두면 이 칸을 비워도 서버가
+                안전하게 키를 사용해 실시간 코디를 생성합니다.
+              </p>
+            </div>
+
+            <div className="space-y-3 border-t border-zinc-200 pt-4">
+              <div className="flex items-center justify-between flex-wrap gap-1">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
+                  <Cloud className="w-3.5 h-3.5 text-indigo-500" /> Supabase
+                  실시간 클라우드 DB 연동 (선택)
+                </h4>
+                <button
+                  type="button"
+                  onClick={copySupabaseSql}
+                  className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <Copy className="w-3 h-3" /> Supabase 테이블 생성 SQL 복사
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-600 mb-1">
+                    Supabase Project URL
+                  </label>
+                  <input
+                    type="url"
+                    value={cfgForm.supabaseUrl}
+                    onChange={(e) =>
+                      setCfgForm({ ...cfgForm, supabaseUrl: e.target.value })
+                    }
+                    placeholder="https://xyzcompany.supabase.co"
+                    className="w-full px-3 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-600 mb-1">
+                    Supabase Anon Public Key
+                  </label>
+                  <input
+                    type="password"
+                    value={cfgForm.supabaseKey}
+                    onChange={(e) =>
+                      setCfgForm({ ...cfgForm, supabaseKey: e.target.value })
+                    }
+                    placeholder="eyJhbGciOiJIUzI1NiIsInR5c..."
+                    className="w-full px-3 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setApiModalOpen(false)}
+                className="px-4 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold hover:bg-zinc-50 cursor-pointer"
+              >
+                닫기
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setApiConfig({
+                    geminiKey: cfgForm.geminiKey.trim(),
+                    fashnKey: cfgForm.fashnKey.trim(),
+                    supabaseUrl: cfgForm.supabaseUrl.trim(),
+                    supabaseKey: cfgForm.supabaseKey.trim(),
+                  });
+                  setApiModalOpen(false);
+                  showToast('백엔드 DB 및 AI API 설정이 저장되었습니다!');
+                }}
+                className="px-5 py-2.5 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 cursor-pointer"
+              >
+                연동 설정 저장 및 적용
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
