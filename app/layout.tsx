@@ -3,11 +3,14 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'AuraFit — AI 원터치 옷장 & 듀얼 페르소나 스타일링 플랫폼',
+  title: 'OBLIQUE — AI 원터치 옷장 & 듀얼 페르소나 스타일링 플랫폼',
   description:
     '내 옷장 원터치 코디 슬롯, DAY/NIGHT 듀얼 패션 엔진, 쇼핑몰 링크 시뮬레이션 및 오픈 옷장 커뮤니티 플랫폼',
+  verification: {
+    google: 'yPywHl0eiTa5szSUpU6Qg3Z5ksfi1SMkvZ0RhBRqzqQ',
+  },
   openGraph: {
-    title: 'AuraFit — AI 원터치 옷장 & 듀얼 페르소나 스타일링 플랫폼',
+    title: 'OBLIQUE — AI 원터치 옷장 & 듀얼 페르소나 스타일링 플랫폼',
     description:
       '카드를 한 번 터치해 내 옷장 코디를 완성하고 KREAM·무신사 매칭 아이템까지 디깅해 보세요.',
     type: 'website',
