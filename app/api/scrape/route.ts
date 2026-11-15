@@ -5,7 +5,6 @@ export const maxDuration = 25;
 
 type CategoryType = '아우터' | '상의' | '하의' | '신발' | '악세사리';
 
-// 간단한 IP별 슬라이딩 윈도우 레이트 리미터 (서버리스 인스턴스 메모리 보호)
 const rateBuckets = new Map<string, number[]>();
 function checkRateLimit(key: string, limit: number, windowMs: number): boolean {
   const now = Date.now();
@@ -39,7 +38,8 @@ function isBlockedHost(hostname: string): boolean {
   }
   const ipv4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (ipv4) {
-    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+    const a = Number(ipv4[1]);
+    const b = Number(ipv4[2]);
     if (
       a === 10 ||
       a === 127 ||
@@ -115,7 +115,6 @@ function decodeHtmlEntities(str: string): string {
 
 function cleanProductTitle(raw: string): string {
   let t = decodeHtmlEntities(raw);
-  // 쇼핑몰 공통 꼬리표 제거 (KREAM, 무신사, 29CM, 에이블리, 자라 등)
   const suffixPatterns = [
     /\s*[-|·]\s*정품\s*안심\s*거래\s*\|\s*KREAM.*$/i,
     /\s*정품\s*안심\s*거래\s*\|\s*KREAM.*$/i,
@@ -134,8 +133,8 @@ function cleanProductTitle(raw: string): string {
     /\s*:\s*브랜드스토어.*$/i,
     /\s*:\s*스마트스토어.*$/i,
   ];
-  for (const pat of suffixPatterns) {
-    t = t.replace(pat, '').trim();
+  for (let i = 0; i < suffixPatterns.length; i++) {
+    t = t.replace(suffixPatterns[i], '').trim();
   }
   return t.slice(0, 80).trim();
 }
@@ -144,7 +143,7 @@ function isGenericOrBlockedTitle(title: string): boolean {
   const cleaned = cleanProductTitle(title);
   if (!cleaned || cleaned.length < 2) return true;
   const lower = cleaned.toLowerCase();
-  const blockedExact = new Set([
+  const blockedExact = [
     'kream',
     'kream | 한정판 거래의 flex',
     '한정판 거래의 flex',
@@ -160,11 +159,12 @@ function isGenericOrBlockedTitle(title: string): boolean {
     '지그재그',
     '네이버 쇼핑',
     '스마트스토어',
-  ]);
-  if (blockedExact.has(lower)) return true;
+    '네이버',
+  ];
+  if (blockedExact.includes(lower)) return true;
 
   if (
-    /(just a moment|attention required|access denied|403 forbidden|robot|captcha|cloudflare|보안\s*확인|잠시만\s*기다려|접근이\s*거부|페이지를\s*찾을\s*수\s*없|error\s*404|not\s*found)/i.test(
+    /(just a moment|attention required|access denied|403 forbidden|robot|captcha|cloudflare|보안\s*확인|잠시만\s*기다려|접근이\s*거부|페이지를\s*찾을\s*수\s*없|error\s*404|not\s*found|통합검색)/i.test(
       cleaned
     )
   ) {
@@ -192,7 +192,7 @@ function isGenericOrBadImage(imgUrl: string): boolean {
     return true;
   }
   if (
-    /(og_kream|kream_og|default_og|musinsa_meta|logo|favicon|sprite|apple-touch-icon|meta_default|share_default|common\/og)/i.test(
+    /(og_kream|kream_og|default_og|musinsa_meta|logo|favicon|sprite|apple-touch-icon|meta_default|share_default|common\/og|naver_og)/i.test(
       lower
     )
   ) {
@@ -262,13 +262,25 @@ function inferCategory(text: string): CategoryType {
 
 function inferSeason(text: string): string {
   const t = text.toLowerCase();
-  if (/(패딩|다운|써마핏|therma|플리스|무스탕|헤비|기모|울\s*코트|캐시미어|머플러|비니|puffer|down|winter)/.test(t)) {
+  if (
+    /(패딩|다운|써마핏|therma|플리스|무스탕|헤비|기모|울\s*코트|캐시미어|머플러|비니|puffer|down|winter)/.test(
+      t
+    )
+  ) {
     return '겨울';
   }
-  if (/(반팔|숏슬리브|슬리브리스|나시|민소매|반바지|쇼츠|린넨|샌들|슬리퍼|쿨링|short\s*sleeve|sleeveless|linen|summer)/.test(t)) {
+  if (
+    /(반팔|숏슬리브|슬리브리스|나시|민소매|반바지|쇼츠|린넨|샌들|슬리퍼|쿨링|short\s*sleeve|sleeveless|linen|summer)/.test(
+      t
+    )
+  ) {
     return '여름';
   }
-  if (/(가디건|트렌치|바람막이|윈드브레이커|블레이저|자켓|재킷|간절기|라이트\s*아우터|셔츠|긴팔)/.test(t)) {
+  if (
+    /(가디건|트렌치|바람막이|윈드브레이커|블레이저|자켓|재킷|간절기|라이트\s*아우터|셔츠|긴팔)/.test(
+      t
+    )
+  ) {
     return '봄/가을';
   }
   return '사계절';
@@ -284,8 +296,9 @@ function formatPriceString(raw: string | number | undefined | null): string {
 }
 
 function extractPriceFromText(text: string): string {
-  // 발매가 또는 즉시 구매가/판매가 우선 탐색
-  const priority = text.match(/(?:즉시\s*구매가|구매가|판매가|할인가|발매가)\s*[:：]?\s*([0-9]{1,3}(?:,[0-9]{3})+)\s*원/);
+  const priority = text.match(
+    /(?:즉시\s*구매가|구매가|판매가|할인가|발매가)\s*[:：]?\s*([0-9]{1,3}(?:,[0-9]{3})+)\s*원/
+  );
   if (priority && priority[1]) {
     return `${priority[1]}원`;
   }
@@ -312,19 +325,19 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
   let price = '';
   let extraCategoryText = '';
 
-  // 1. JSON-LD (Product 스키마 우선 추출)
-  const ldMatches = html.matchAll(
-    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
-  );
-  for (const m of ldMatches) {
+  // 1. JSON-LD (Product 스키마 우선 추출 - 모든 TS 타겟 호환용 exec 루프)
+  const ldRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let ldMatch: RegExpExecArray | null;
+  while ((ldMatch = ldRegex.exec(html)) !== null) {
     try {
-      const parsed = JSON.parse(m[1].trim());
+      const parsed = JSON.parse(ldMatch[1].trim());
       const candidates = Array.isArray(parsed)
         ? parsed
         : parsed?.['@graph'] && Array.isArray(parsed['@graph'])
         ? parsed['@graph']
         : [parsed];
-      for (const item of candidates) {
+      for (let i = 0; i < candidates.length; i++) {
+        const item = candidates[i];
         if (!item || typeof item !== 'object') continue;
         const itemType = String(item['@type'] || '').toLowerCase();
         if (itemType.includes('product')) {
@@ -358,8 +371,9 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
 
   // 2. 모든 <meta> 태그 속성 순서 무관 파싱
   const metaMap = new Map<string, string>();
-  const metaTags = html.matchAll(/<meta\s+[^>]*>/gi);
-  for (const tagMatch of metaTags) {
+  const metaRegex = /<meta\s+[^>]*>/gi;
+  let tagMatch: RegExpExecArray | null;
+  while ((tagMatch = metaRegex.exec(html)) !== null) {
     const tag = tagMatch[0];
     const keyMatch = tag.match(/(?:property|name|itemprop)\s*=\s*["']([^"']+)["']/i);
     const valMatch = tag.match(/content\s*=\s*["']([^"']*)["']/i);
@@ -377,13 +391,13 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
     metaMap.get('twitter:title'),
     metaMap.get('title'),
   ];
-  for (const cand of metaTitleCandidates) {
+  for (let i = 0; i < metaTitleCandidates.length; i++) {
+    const cand = metaTitleCandidates[i];
     if (!title && cand && !isGenericOrBlockedTitle(cand)) {
       title = cleanProductTitle(cand);
     }
   }
 
-  // <title> 태그 보조 확인
   if (!title) {
     const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     if (titleTag && titleTag[1] && !isGenericOrBlockedTitle(titleTag[1])) {
@@ -397,7 +411,8 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
     metaMap.get('twitter:image'),
     metaMap.get('image'),
   ];
-  for (const cand of metaImgCandidates) {
+  for (let i = 0; i < metaImgCandidates.length; i++) {
+    const cand = metaImgCandidates[i];
     if (!image && cand) {
       const norm = normalizeImageUrl(cand, pageUrl);
       if (!isGenericOrBadImage(norm)) {
@@ -406,11 +421,11 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
     }
   }
 
-  // 만약 meta 이미지가 없거나 로고였다면 본문 내 쇼핑몰 상품 CDN 이미지 스캔
   if (!image) {
     const imgCandidates: { url: string; score: number }[] = [];
-    const imgMatches = html.matchAll(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi);
-    for (const im of imgMatches) {
+    const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+    let im: RegExpExecArray | null;
+    while ((im = imgRegex.exec(html)) !== null) {
       const norm = normalizeImageUrl(im[1], pageUrl);
       if (!norm) continue;
       const altMatch = im[0].match(/alt=["']([^"']*)["']/i);
@@ -437,14 +452,19 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
   return { title, image, price, extraCategoryText };
 }
 
-async function fetchHtmlWithUa(url: string, userAgent: string, timeoutMs = 5500): Promise<string | null> {
+async function fetchHtmlWithUa(
+  url: string,
+  userAgent: string,
+  timeoutMs = 4500
+): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       headers: {
         'User-Agent': userAgent,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
         'Cache-Control': 'no-cache',
       },
@@ -460,11 +480,11 @@ async function fetchHtmlWithUa(url: string, userAgent: string, timeoutMs = 5500)
   }
 }
 
-// GET /api/scrape?imageUrl=...&referer=... : 네이버/KREAM/무신사 핫링크(Referer) 차단 우회 및 WebP 변환용 동일 출처 이미지 프록시
+// GET /api/scrape?imageUrl=...&referer=... : 네이버/KREAM/무신사 핫링크 차단 우회 이미지 프록시
 export async function GET(request: Request) {
   const ip = getClientIp(request);
   if (!checkRateLimit(`img:${ip}`, 60, 60_000)) {
-    return new NextResponse('Too Many Requests', { status: 429 });
+    return new Response('Too Many Requests', { status: 429 });
   }
 
   const { searchParams } = new URL(request.url);
@@ -473,16 +493,14 @@ export async function GET(request: Request) {
 
   const { cleanUrl } = extractAndValidateUrl(rawImgUrl);
   if (!cleanUrl) {
-    return new NextResponse('Invalid imageUrl', { status: 400 });
+    return new Response('Invalid imageUrl', { status: 400 });
   }
 
   let refererOrigin = '';
   try {
-    if (rawReferer) {
-      refererOrigin = new URL(rawReferer).origin + '/';
-    } else {
-      refererOrigin = new URL(cleanUrl).origin + '/';
-    }
+    refererOrigin = rawReferer
+      ? new URL(rawReferer).origin + '/'
+      : new URL(cleanUrl).origin + '/';
   } catch {
     refererOrigin = '';
   }
@@ -502,16 +520,16 @@ export async function GET(request: Request) {
     });
 
     if (!upstream.ok) {
-      return new NextResponse('Upstream image fetch failed', { status: 502 });
+      return new Response('Upstream image fetch failed', { status: 502 });
     }
 
     const contentType = upstream.headers.get('content-type') || 'image/jpeg';
     if (!contentType.startsWith('image/')) {
-      return new NextResponse('Not an image', { status: 415 });
+      return new Response('Not an image', { status: 415 });
     }
 
     const buf = await upstream.arrayBuffer();
-    return new NextResponse(buf, {
+    return new Response(buf, {
       status: 200,
       headers: {
         'Content-Type': contentType,
@@ -519,7 +537,7 @@ export async function GET(request: Request) {
       },
     });
   } catch {
-    return new NextResponse('Image proxy timeout', { status: 504 });
+    return new Response('Image proxy timeout', { status: 504 });
   } finally {
     clearTimeout(timer);
   }
@@ -542,7 +560,10 @@ export async function POST(request: Request) {
 
     const { cleanUrl, shareHint } = extractAndValidateUrl(body.url);
     if (!cleanUrl) {
-      return NextResponse.json({ success: false, error: '올바른 상품 페이지 주소를 입력해 주세요.' }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: '올바른 상품 페이지 주소를 입력해 주세요.' },
+        { status: 400 }
+      );
     }
 
     const store = detectStoreName(cleanUrl);
@@ -551,16 +572,16 @@ export async function POST(request: Request) {
     let bestPrice = '';
     let extraText = '';
 
-    // 1차 전략: 카카오톡·페이스북 공유 미리보기 봇 UA & 네이버 Yeti 봇 UA (국내 쇼핑몰 SSR OG 메타태그 화이트리스트 경로)
+    // 1차 전략: 카카오톡·페이스북 공유 미리보기 봇 & 네이버 Yeti 봇 & 크롬 UA 직접 조회
     const botUserAgents = [
       'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php); kakaotalk-scrap/1.0 (+https://devtalk.kakao.com)',
       'Mozilla/5.0 (compatible; Yeti/1.1; +http://naver.me/bot)',
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     ];
 
-    for (const ua of botUserAgents) {
+    for (let i = 0; i < botUserAgents.length; i++) {
       if (bestTitle && bestImage) break;
-      const html = await fetchHtmlWithUa(cleanUrl, ua, 4800);
+      const html = await fetchHtmlWithUa(cleanUrl, botUserAgents[i], 4200);
       if (!html) continue;
       const parsed = parseHtmlMetadata(html, cleanUrl);
       if (!bestTitle && parsed.title) bestTitle = parsed.title;
@@ -569,72 +590,86 @@ export async function POST(request: Request) {
       if (parsed.extraCategoryText) extraText += ' ' + parsed.extraCategoryText;
     }
 
-    // 2차 전략: Jina Reader 헤드리스 SPA 렌더링 폴백 (Cloudflare/WAF 또는 Nuxt/Next 동적 렌더링 페이지 대응)
+    // 2차 전략: Jina Reader 기본 마크다운 모드 (API 키 없이 무료 헤드리스 렌더링 지원)
     if (!bestTitle || !bestImage) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 9000);
+      const timer = setTimeout(() => controller.abort(), 8500);
       try {
         const jinaRes = await fetch(`https://r.jina.ai/${cleanUrl}`, {
           headers: {
-            Accept: 'application/json',
             'X-Locale': 'ko-KR',
-            'X-With-Images-Summary': 'true',
           },
           signal: controller.signal,
         });
         if (jinaRes.ok) {
-          const jinaJson = await jinaRes.json();
-          const jData = jinaJson?.data;
-          if (jData) {
-            if (!bestTitle && typeof jData.title === 'string' && !isGenericOrBlockedTitle(jData.title)) {
-              bestTitle = cleanProductTitle(jData.title);
-            }
-            const mdContent = typeof jData.content === 'string' ? jData.content : '';
-            if (!bestPrice && mdContent) {
-              bestPrice = extractPriceFromText(mdContent);
-            }
-            if (mdContent) {
-              extraText += ' ' + mdContent.slice(0, 1200);
-            }
+          const mdText = await jinaRes.text();
+          const titleLine = mdText.match(/^Title:\s*(.+)$/m);
+          if (titleLine && titleLine[1] && !isGenericOrBlockedTitle(titleLine[1])) {
+            if (!bestTitle) bestTitle = cleanProductTitle(titleLine[1]);
+          }
+          if (!bestPrice) {
+            bestPrice = extractPriceFromText(mdText);
+          }
+          extraText += ' ' + mdText.slice(0, 1500);
 
-            if (!bestImage) {
-              const scored: { url: string; score: number }[] = [];
-              // images 요약 객체 탐색
-              if (jData.images && typeof jData.images === 'object') {
-                for (const [alt, rawU] of Object.entries(jData.images)) {
-                  if (typeof rawU !== 'string') continue;
-                  const norm = normalizeImageUrl(rawU, cleanUrl);
-                  if (!norm) continue;
-                  const sc = scoreProductImage(norm, alt, bestTitle);
-                  if (sc > 0) scored.push({ url: norm, score: sc });
-                }
-              }
-              // 마크다운 ![alt](url) 탐색
-              const mdImgs = mdContent.matchAll(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g);
-              for (const m of mdImgs) {
-                const norm = normalizeImageUrl(m[2], cleanUrl);
-                if (!norm) continue;
-                const sc = scoreProductImage(norm, m[1], bestTitle);
-                if (sc > 0) scored.push({ url: norm, score: sc });
-              }
-              scored.sort((a, b) => b.score - a.score);
-              if (scored[0]) {
-                bestImage = scored[0].url;
-              }
+          if (!bestImage) {
+            const scored: { url: string; score: number }[] = [];
+            const mdImgRegex = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+            let m: RegExpExecArray | null;
+            while ((m = mdImgRegex.exec(mdText)) !== null) {
+              const norm = normalizeImageUrl(m[2], cleanUrl);
+              if (!norm) continue;
+              const sc = scoreProductImage(norm, m[1], bestTitle);
+              if (sc > 0) scored.push({ url: norm, score: sc });
+            }
+            scored.sort((a, b) => b.score - a.score);
+            if (scored[0]) {
+              bestImage = scored[0].url;
             }
           }
         }
       } catch {
-        // 다음 폴백 진행
+        // 다음 폴백으로 진행
       } finally {
         clearTimeout(timer);
       }
     }
 
-    // 3차 전략: Microlink 오픈그래프 API 보조 폴백
+    // 3차 전략: 네이버 모바일 통합검색 인덱스 보조 조회 (KREAM·무신사·스마트스토어 강력 방화벽 차단 시에도 상품명·썸네일 확보)
+    if (!bestTitle || !bestImage) {
+      const naverHtml = await fetchHtmlWithUa(
+        `https://m.search.naver.com/search.naver?query=${encodeURIComponent(cleanUrl)}`,
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+        4500
+      );
+      if (naverHtml) {
+        if (!bestTitle) {
+          // KREAM / 무신사 / 29CM 인덱싱 제목 패턴 추출
+          const kreamTitleMatch = naverHtml.match(
+            />([^<>]{4,80}?(?:정품\s*안심\s*거래\s*\|\s*KREAM|\|\s*KREAM|\|\s*무신사|\|\s*29CM))<\//i
+          );
+          if (kreamTitleMatch && kreamTitleMatch[1] && !isGenericOrBlockedTitle(kreamTitleMatch[1])) {
+            bestTitle = cleanProductTitle(kreamTitleMatch[1]);
+          }
+        }
+        if (!bestImage) {
+          const pstaticMatch = naverHtml.match(
+            /https?:\/\/(?:kream-phinf|search\.pstatic\.net\/common\/\?src=https?[^"'&\s]+|shop-phinf\.pstatic\.net)[^"'<>\s]+/i
+          );
+          if (pstaticMatch && pstaticMatch[0]) {
+            const rawFound = decodeHtmlEntities(pstaticMatch[0]);
+            if (!isGenericOrBadImage(rawFound)) {
+              bestImage = rawFound;
+            }
+          }
+        }
+      }
+    }
+
+    // 4차 전략: Microlink API 보조 조회
     if (!bestTitle || !bestImage) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
+      const timer = setTimeout(() => controller.abort(), 4500);
       try {
         const microRes = await fetch(
           `https://api.microlink.io/?url=${encodeURIComponent(cleanUrl)}`,
@@ -659,7 +694,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // 공유 텍스트에 상품명이 함께 복사되어 온 경우 보조 활용
     if (!bestTitle && shareHint && !isGenericOrBlockedTitle(shareHint)) {
       bestTitle = cleanProductTitle(shareHint);
     }
