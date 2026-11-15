@@ -214,6 +214,205 @@ create policy "Authenticated users can send proposals" on public.outfit_proposal
 create policy "Authenticated users can update proposal likes" on public.outfit_proposals for update using (auth.role() = 'authenticated');
 create policy "Target user or proposer can delete proposal" on public.outfit_proposals for delete using (auth.uid() = target_user_id or auth.uid() = proposer_user_id);`;
 
+const STORAGE_BUCKET = 'wardrobe-images';
+
+const STEP3_STORAGE_SQL = `-- =====================================================================
+-- OBLIQUE (AuraFit) 3단계: Supabase Storage 의류 이미지 전용 버킷 & RLS 보안 정책
+-- 실행 위치: Supabase Dashboard -> SQL Editor -> New Query 붙여넣기 후 [Run] 클릭
+-- 공식 참고: https://supabase.com/docs/guides/storage/buckets/creating-buckets
+--           https://supabase.com/docs/guides/storage/security/access-control
+-- =====================================================================
+
+-- 1. 의류 사진 전용 퍼블릭 버킷(wardrobe-images) 생성 (5MB 한도, 이미지 MIME 제한)
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'wardrobe-images',
+  'wardrobe-images',
+  true,
+  5242880,
+  array['image/webp', 'image/jpeg', 'image/png', 'image/gif']
+)
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+-- 2. 기존 동일 이름 정책 충돌 방지용 초기화
+drop policy if exists "Public can view wardrobe images" on storage.objects;
+drop policy if exists "Users can upload own wardrobe images" on storage.objects;
+drop policy if exists "Users can update own wardrobe images" on storage.objects;
+drop policy if exists "Users can delete own wardrobe images" on storage.objects;
+
+-- 3. 조회(SELECT): 오픈 옷장 갤러리·룩북·추후 AI 가상 피팅 렌더링을 위해 퍼블릭 조회 허용
+create policy "Public can view wardrobe images"
+  on storage.objects for select
+  using ( bucket_id = 'wardrobe-images' );
+
+-- 4. 업로드(INSERT): 로그인한 본인 폴더({user_id}/파일명.webp)에만 업로드 허용
+create policy "Users can upload own wardrobe images"
+  on storage.objects for insert
+  to authenticated
+  with check (
+    bucket_id = 'wardrobe-images'
+    and (storage.foldername(name))[1] = (select auth.uid()::text)
+  );
+
+-- 5. 수정(UPDATE): 본인 폴더 내 이미지에 한해 수정 허용
+create policy "Users can update own wardrobe images"
+  on storage.objects for update
+  to authenticated
+  using (
+    bucket_id = 'wardrobe-images'
+    and (storage.foldername(name))[1] = (select auth.uid()::text)
+  )
+  with check (
+    bucket_id = 'wardrobe-images'
+    and (storage.foldername(name))[1] = (select auth.uid()::text)
+  );
+
+-- 6. 삭제(DELETE): 옷장에서 옷을 지울 때 본인 스토리지 파일만 함께 삭제 가능
+create policy "Users can delete own wardrobe images"
+  on storage.objects for delete
+  to authenticated
+  using (
+    bucket_id = 'wardrobe-images'
+    and (storage.foldername(name))[1] = (select auth.uid()::text)
+  );`;
+
+interface CompressedPhotoResult {
+  blob: Blob;
+  dataUrl: string;
+  ext: 'webp' | 'jpg';
+  mimeType: string;
+  originalBytes: number;
+  compressedBytes: number;
+}
+
+const compressImageToWebP = (
+  file: File,
+  maxDimension = 1280,
+  quality = 0.84
+): Promise<CompressedPhotoResult> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('파일을 읽을 수 없습니다.'));
+    reader.onload = (ev) => {
+      const rawDataUrl = typeof ev.target?.result === 'string' ? ev.target.result : '';
+      if (!rawDataUrl) {
+        reject(new Error('이미지 데이터가 비어 있습니다.'));
+        return;
+      }
+      const img = new window.Image();
+      img.onload = () => {
+        try {
+          let targetW = img.naturalWidth || img.width || 800;
+          let targetH = img.naturalHeight || img.height || 800;
+          if (targetW > maxDimension || targetH > maxDimension) {
+            if (targetW >= targetH) {
+              targetH = Math.round((targetH * maxDimension) / targetW);
+              targetW = maxDimension;
+            } else {
+              targetW = Math.round((targetW * maxDimension) / targetH);
+              targetH = maxDimension;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve({
+              blob: file,
+              dataUrl: rawDataUrl,
+              ext: 'jpg',
+              mimeType: file.type || 'image/jpeg',
+              originalBytes: file.size,
+              compressedBytes: file.size,
+            });
+            return;
+          }
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+
+          canvas.toBlob(
+            (webpBlob) => {
+              const finalizeBlob = (b: Blob, ext: 'webp' | 'jpg', mime: string) => {
+                const bReader = new FileReader();
+                bReader.onload = () => {
+                  resolve({
+                    blob: b,
+                    dataUrl: typeof bReader.result === 'string' ? bReader.result : rawDataUrl,
+                    ext,
+                    mimeType: mime,
+                    originalBytes: file.size,
+                    compressedBytes: b.size,
+                  });
+                };
+                bReader.onerror = () => {
+                  resolve({
+                    blob: b,
+                    dataUrl: rawDataUrl,
+                    ext,
+                    mimeType: mime,
+                    originalBytes: file.size,
+                    compressedBytes: b.size,
+                  });
+                };
+                bReader.readAsDataURL(b);
+              };
+
+              if (webpBlob && webpBlob.type === 'image/webp') {
+                finalizeBlob(webpBlob, 'webp', 'image/webp');
+              } else {
+                canvas.toBlob(
+                  (jpgBlob) => {
+                    if (jpgBlob) {
+                      finalizeBlob(jpgBlob, 'jpg', 'image/jpeg');
+                    } else {
+                      resolve({
+                        blob: file,
+                        dataUrl: rawDataUrl,
+                        ext: 'jpg',
+                        mimeType: file.type || 'image/jpeg',
+                        originalBytes: file.size,
+                        compressedBytes: file.size,
+                      });
+                    }
+                  },
+                  'image/jpeg',
+                  quality
+                );
+              }
+            },
+            'image/webp',
+            quality
+          );
+        } catch {
+          resolve({
+            blob: file,
+            dataUrl: rawDataUrl,
+            ext: 'jpg',
+            mimeType: file.type || 'image/jpeg',
+            originalBytes: file.size,
+            compressedBytes: file.size,
+          });
+        }
+      };
+      img.onerror = () => {
+        resolve({
+          blob: file,
+          dataUrl: rawDataUrl,
+          ext: 'jpg',
+          mimeType: file.type || 'image/jpeg',
+          originalBytes: file.size,
+          compressedBytes: file.size,
+        });
+      };
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+};
+
 const createSvgItem = (
   bgColor: string,
   iconEmoji: string,
@@ -700,6 +899,11 @@ export default function AuraFitClient() {
   const [photoSeason, setPhotoSeason] = useState<string>('사계절');
   const [photoStatus, setPhotoStatus] = useState<ClothStatus>('보유 중');
   const [photoDataUrl, setPhotoDataUrl] = useState<string>('');
+  const [photoBlob, setPhotoBlob] = useState<Blob | null>(null);
+  const [photoExt, setPhotoExt] = useState<'webp' | 'jpg'>('webp');
+  const [photoMime, setPhotoMime] = useState<string>('image/webp');
+  const [photoCompressInfo, setPhotoCompressInfo] = useState<string>('');
+  const [isUploadingCloth, setIsUploadingCloth] = useState<boolean>(false);
 
   const [shopUrlInput, setShopUrlInput] = useState<string>('');
   const [isFetchingUrl, setIsFetchingUrl] = useState<boolean>(false);
@@ -748,8 +952,8 @@ export default function AuraFitClient() {
 
   // 메모이즈된 Supabase 클라이언트
   const supabaseClient: SupabaseClient | null = useMemo(() => {
-    const url = (apiConfig.supabaseUrl || envSbUrl).trim();
-    const key = (apiConfig.supabaseKey || envSbKey).trim();
+    const url = (envSbUrl || apiConfig.supabaseUrl).trim();
+    const key = (envSbKey || apiConfig.supabaseKey).trim();
     if (!url || !key) return null;
     try {
       return createClient(url, key);
@@ -798,8 +1002,8 @@ export default function AuraFitClient() {
         setApiConfig((prev) => ({
           geminiKey: parsed.geminiKey || '',
           fashnKey: parsed.fashnKey || '',
-          supabaseUrl: parsed.supabaseUrl || prev.supabaseUrl,
-          supabaseKey: parsed.supabaseKey || prev.supabaseKey,
+          supabaseUrl: envSbUrl || parsed.supabaseUrl || prev.supabaseUrl,
+          supabaseKey: envSbKey || parsed.supabaseKey || prev.supabaseKey,
         }));
       }
     } catch {
@@ -1513,16 +1717,33 @@ export default function AuraFitClient() {
     setSavedLooks((prev) => prev.filter((l) => l.id !== lookId));
   };
 
-  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      if (typeof ev.target?.result === 'string') {
-        setPhotoDataUrl(ev.target.result);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressImageToWebP(file, 1280, 0.84);
+      setPhotoDataUrl(compressed.dataUrl);
+      setPhotoBlob(compressed.blob);
+      setPhotoExt(compressed.ext);
+      setPhotoMime(compressed.mimeType);
+      const origKb = Math.max(1, Math.round(compressed.originalBytes / 1024));
+      const compKb = Math.max(1, Math.round(compressed.compressedBytes / 1024));
+      const savedPct =
+        compressed.originalBytes > compressed.compressedBytes
+          ? Math.round(
+              (1 - compressed.compressedBytes / compressed.originalBytes) * 100
+            )
+          : 0;
+      setPhotoCompressInfo(
+        savedPct > 0
+          ? `${compressed.ext.toUpperCase()} 자동 압축: ${origKb.toLocaleString()}KB → ${compKb.toLocaleString()}KB (${savedPct}% 경량화)`
+          : `${compressed.ext.toUpperCase()} 최적화 완료 (${compKb.toLocaleString()}KB)`
+      );
+    } catch {
+      showToast('이미지 압축 처리 중 오류가 발생했습니다. 다른 사진을 선택해 주세요.');
+    }
   };
 
   const insertClothItem = async (
@@ -1568,31 +1789,67 @@ export default function AuraFitClient() {
       return;
     }
 
-    const created = await insertClothItem({
-      name: photoName.trim() || '새 의류 아이템',
-      category: photoCategory,
-      season: photoSeason,
-      status: photoStatus,
-      sourceUrl: '',
-      image: photoDataUrl,
-    });
+    setIsUploadingCloth(true);
+    try {
+      let finalImageUrl = photoDataUrl;
+      let storedInBucket = false;
 
-    setWardrobe((prev) => [created, ...prev]);
-    setSelectedClothIds((prev) => [
-      ...prev.filter((cid) => {
-        const found = wardrobe.find((w) => w.id === cid);
-        return found ? found.category !== created.category : true;
-      }),
-      created.id,
-    ]);
-    setPhotoName('');
-    setPhotoDataUrl('');
-    setUploadModalOpen(false);
-    showToast(
-      authUser
-        ? `☁️ '${created.name}' 아이템이 내 클라우드 옷장에 저장되었습니다.`
-        : `'${created.name}' 아이템이 옷장에 등록되었습니다.`
-    );
+      if (authUser && supabaseClient && photoBlob) {
+        const uniqueName = `${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 8)}.${photoExt}`;
+        const storagePath = `${authUser.id}/${uniqueName}`;
+        const { error: upErr } = await supabaseClient.storage
+          .from(STORAGE_BUCKET)
+          .upload(storagePath, photoBlob, {
+            contentType: photoMime,
+            cacheControl: '3600',
+            upsert: false,
+          });
+
+        if (!upErr) {
+          const { data: pubData } = supabaseClient.storage
+            .from(STORAGE_BUCKET)
+            .getPublicUrl(storagePath);
+          if (pubData?.publicUrl) {
+            finalImageUrl = pubData.publicUrl;
+            storedInBucket = true;
+          }
+        }
+      }
+
+      const created = await insertClothItem({
+        name: photoName.trim() || '새 의류 아이템',
+        category: photoCategory,
+        season: photoSeason,
+        status: photoStatus,
+        sourceUrl: '',
+        image: finalImageUrl,
+      });
+
+      setWardrobe((prev) => [created, ...prev]);
+      setSelectedClothIds((prev) => [
+        ...prev.filter((cid) => {
+          const found = wardrobe.find((w) => w.id === cid);
+          return found ? found.category !== created.category : true;
+        }),
+        created.id,
+      ]);
+      setPhotoName('');
+      setPhotoDataUrl('');
+      setPhotoBlob(null);
+      setPhotoCompressInfo('');
+      setUploadModalOpen(false);
+      showToast(
+        storedInBucket
+          ? `☁️ '${created.name}' 사진이 Supabase Storage(WebP)에 영구 업로드되었습니다!`
+          : authUser
+          ? `☁️ '${created.name}' 아이템이 저장되었습니다. (Storage 버킷 SQL 실행 시 전용 URL로 저장됩니다)`
+          : `'${created.name}' 아이템이 옷장에 등록되었습니다.`
+      );
+    } finally {
+      setIsUploadingCloth(false);
+    }
   };
 
   const fetchUrlMetadata = async (preset?: UrlPreviewData) => {
@@ -1685,7 +1942,17 @@ export default function AuraFitClient() {
   };
 
   const deleteCloth = async (id: number) => {
+    const targetItem = wardrobe.find((w) => w.id === id);
     if (authUser && supabaseClient) {
+      const marker = `/storage/v1/object/public/${STORAGE_BUCKET}/`;
+      if (targetItem?.image && targetItem.image.includes(marker)) {
+        const rawObjectPath = targetItem.image.split(marker)[1]?.split('?')[0];
+        if (rawObjectPath) {
+          await supabaseClient.storage
+            .from(STORAGE_BUCKET)
+            .remove([decodeURIComponent(rawObjectPath)]);
+        }
+      }
       await supabaseClient
         .from('wardrobe_items')
         .delete()
@@ -1890,6 +2157,20 @@ export default function AuraFitClient() {
       document.body.removeChild(temp);
     }
     showToast('2단계 멀티유저 & RLS 보안 SQL 스크립트가 복사되었습니다!');
+  };
+
+  const copyStep3StorageSql = async () => {
+    try {
+      await navigator.clipboard.writeText(STEP3_STORAGE_SQL);
+    } catch {
+      const temp = document.createElement('textarea');
+      temp.value = STEP3_STORAGE_SQL;
+      document.body.appendChild(temp);
+      temp.select();
+      document.execCommand('copy');
+      document.body.removeChild(temp);
+    }
+    showToast('3단계 Supabase Storage 버킷 & RLS 보안 SQL이 복사되었습니다!');
   };
 
   const exportDatabaseJson = () => {
@@ -3879,6 +4160,25 @@ export default function AuraFitClient() {
                     onChange={handlePhotoFileChange}
                     className="w-full text-xs text-zinc-500 file:mr-3 file:py-2 file:px-3.5 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-zinc-900 file:text-white hover:file:bg-zinc-700 cursor-pointer"
                   />
+                  {photoDataUrl && (
+                    <div className="mt-2.5 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-3">
+                      <img
+                        src={photoDataUrl}
+                        alt="압축 미리보기"
+                        className="w-12 h-12 rounded-lg object-cover border border-emerald-200 bg-white shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-bold text-emerald-900 truncate">
+                          {photoCompressInfo || 'WebP 클라우드 최적화 준비 완료'}
+                        </p>
+                        <p className="text-[10px] text-emerald-700">
+                          {authUser
+                            ? '등록 시 내 전용 Supabase Storage 폴더로 안전하게 업로드됩니다.'
+                            : '로그인 후 등록하면 클라우드 Storage URL로 영구 보관됩니다.'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold mb-1.5">
@@ -3945,10 +4245,13 @@ export default function AuraFitClient() {
                 </div>
                 <button
                   type="submit"
-                  className="w-full py-3 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 transition cursor-pointer"
+                  disabled={isUploadingCloth}
+                  className="w-full py-3 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 transition cursor-pointer disabled:opacity-50"
                 >
-                  {authUser
-                    ? '내 클라우드 옷장에 영구 등록하기'
+                  {isUploadingCloth
+                    ? '☁️ WebP 압축 & 클라우드 업로드 중...'
+                    : authUser
+                    ? '내 클라우드 옷장(Storage)에 영구 등록하기'
                     : '옷장에 등록하기'}
                 </button>
               </form>
@@ -4635,13 +4938,22 @@ export default function AuraFitClient() {
                   <Cloud className="w-3.5 h-3.5 text-indigo-500" /> Supabase
                   멀티유저 DB & Auth 연결
                 </h4>
-                <button
-                  type="button"
-                  onClick={copySupabaseSql}
-                  className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"
-                >
-                  <Copy className="w-3 h-3" /> 2단계 정식 테이블 & RLS SQL 복사
-                </button>
+                <div className="flex items-center flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={copySupabaseSql}
+                    className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Copy className="w-3 h-3" /> 2단계 테이블 SQL 복사
+                  </button>
+                  <button
+                    type="button"
+                    onClick={copyStep3StorageSql}
+                    className="text-[11px] font-bold text-emerald-600 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Copy className="w-3 h-3" /> 3단계 Storage 버킷 SQL 복사
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
