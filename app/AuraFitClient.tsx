@@ -4463,7 +4463,6 @@ export default function AuraFitClient() {
                     <div className="flex items-start gap-3">
                       <div className="shrink-0 flex flex-col items-center gap-1">
                         <img
-                            referrerPolicy="no-referrer"
                           src={urlPreview.image}
                           alt="상품 썸네일"
                           referrerPolicy="no-referrer"

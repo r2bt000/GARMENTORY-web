@@ -423,7 +423,7 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
 
   if (!image) {
     const imgCandidates: { url: string; score: number }[] = [];
-    const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+    const imgRegex = /<img[^>]+(?:data-src|src)=["']([^"']+)["'][^>]*>/gi;
     let im: RegExpExecArray | null;
     while ((im = imgRegex.exec(html)) !== null) {
       const norm = normalizeImageUrl(im[1], pageUrl);
@@ -432,6 +432,19 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
       const sc = scoreProductImage(norm, altMatch?.[1] || '', title);
       if (sc > 0) imgCandidates.push({ url: norm, score: sc });
     }
+
+    // Nuxt(__NUXT__ \u002F) 및 Next.js(__NEXT_DATA__ / __next_f) 내부 고화질 상품 CDN URL 직접 스캔
+    const unescapedHtml = html.replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
+    const cdnRegex =
+      /https?:\/\/(?:kream-phinf\.pstatic\.net|image\.msscdn\.net|img\.29cm\.co\.kr|d3ha2047wt6x28\.cloudfront\.net|cf\.product-image\.s\.zigzag\.kr|shop-phinf\.pstatic\.net|static\.zara\.net)[^"'\s<>\\)]+/gi;
+    let cm: RegExpExecArray | null;
+    while ((cm = cdnRegex.exec(unescapedHtml)) !== null) {
+      const norm = normalizeImageUrl(cm[0], pageUrl);
+      if (!norm) continue;
+      const sc = scoreProductImage(norm, '', title);
+      if (sc > 0) imgCandidates.push({ url: norm, score: sc });
+    }
+
     imgCandidates.sort((a, b) => b.score - a.score);
     if (imgCandidates[0]) {
       image = imgCandidates[0].url;
@@ -523,10 +536,17 @@ export async function GET(request: Request) {
       return new Response('Upstream image fetch failed', { status: 502 });
     }
 
-    const contentType = upstream.headers.get('content-type') || 'image/jpeg';
-    if (!contentType.startsWith('image/')) {
+    const rawType = (upstream.headers.get('content-type') || '').toLowerCase();
+    if (rawType.startsWith('text/html') || rawType.startsWith('application/json')) {
       return new Response('Not an image', { status: 415 });
     }
+    const contentType = rawType.startsWith('image/')
+      ? rawType
+      : cleanUrl.toLowerCase().includes('.webp')
+      ? 'image/webp'
+      : cleanUrl.toLowerCase().includes('.png')
+      ? 'image/png'
+      : 'image/jpeg';
 
     const buf = await upstream.arrayBuffer();
     return new Response(buf, {
