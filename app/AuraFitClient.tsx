@@ -776,11 +776,7 @@ export default function AuraFitClient() {
         if (Array.isArray(parsed)) setCommunityUsers(parsed);
       }
 
-      const savedSel = localStorage.getItem(STORAGE_KEYS.SELECTED_IDS);
-      if (savedSel) {
-        const parsed = JSON.parse(savedSel);
-        if (Array.isArray(parsed)) setSelectedClothIds(parsed);
-      }
+      // 접속·새로고침 시 항상 선택 해제 상태([])로 시작 (사용자 직접 선택 원칙)
 
       const savedCfg = localStorage.getItem(STORAGE_KEYS.CONFIG);
       if (savedCfg) {
@@ -882,14 +878,9 @@ export default function AuraFitClient() {
             image: r.image_url,
           }));
           setWardrobe(mapped);
-          setSelectedClothIds((prev) => {
-            const stillValid = prev.filter((id) =>
-              mapped.some((m) => m.id === id)
-            );
-            return stillValid.length > 0
-              ? stillValid
-              : mapped.slice(0, 5).map((m) => m.id);
-          });
+          setSelectedClothIds((prev) =>
+            prev.filter((id) => mapped.some((m) => m.id === id))
+          );
         }
 
         // 3. 저장된 룩북 조회
@@ -1303,9 +1294,10 @@ export default function AuraFitClient() {
       return;
     }
 
-    let activeIds = overrideIds ?? validSelectedIds;
+    const activeIds = overrideIds ?? validSelectedIds;
     if (activeIds.length === 0) {
-      activeIds = autoTouchSelectOutfit();
+      showToast('먼저 옷장에서 코디할 의류를 직접 터치해 1벌 이상 선택해 주세요!');
+      return;
     }
 
     const picked = wardrobe.filter((w) => activeIds.includes(w.id));
@@ -1596,13 +1588,6 @@ export default function AuraFitClient() {
       });
 
       setWardrobe((prev) => [created, ...prev]);
-      setSelectedClothIds((prev) => [
-        ...prev.filter((cid) => {
-          const found = wardrobe.find((w) => w.id === cid);
-          return found ? found.category !== created.category : true;
-        }),
-        created.id,
-      ]);
       setPhotoName('');
       setPhotoDataUrl('');
       setPhotoBlob(null);
@@ -1825,13 +1810,6 @@ export default function AuraFitClient() {
       });
 
       setWardrobe((prev) => [created, ...prev]);
-      setSelectedClothIds((prev) => [
-        ...prev.filter((cid) => {
-          const found = wardrobe.find((w) => w.id === cid);
-          return found ? found.category !== created.category : true;
-        }),
-        created.id,
-      ]);
       setUrlPreview(null);
       setUrlCustomBlob(null);
       setShopUrlInput('');
@@ -1839,7 +1817,7 @@ export default function AuraFitClient() {
       showToast(
         storedInBucket
           ? `☁️ '${created.name}' 상품 이미지(WebP)와 링크가 내 클라우드 옷장에 저장되었습니다!`
-          : `쇼핑몰 링크 상품('${created.name}')이 옷장 등록 및 코디 슬롯에 선택되었습니다!`
+          : `쇼핑몰 링크 상품('${created.name}')이 내 옷장에 등록되었습니다!`
       );
     } finally {
       setIsUploadingCloth(false);
