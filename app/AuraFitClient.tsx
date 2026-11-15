@@ -100,6 +100,8 @@ interface UrlPreviewData {
   category: CategoryType;
   season: string;
   image: string;
+  rawImageUrl?: string;
+  autoExtracted?: boolean;
 }
 
 interface MissingSuggestion {
@@ -909,6 +911,9 @@ export default function AuraFitClient() {
   const [isFetchingUrl, setIsFetchingUrl] = useState<boolean>(false);
   const [urlPreview, setUrlPreview] = useState<UrlPreviewData | null>(null);
   const [urlStatus, setUrlStatus] = useState<ClothStatus>('구매 예정');
+  const [urlCustomBlob, setUrlCustomBlob] = useState<Blob | null>(null);
+  const [urlCustomExt, setUrlCustomExt] = useState<'webp' | 'jpg'>('webp');
+  const [urlCustomMime, setUrlCustomMime] = useState<string>('image/webp');
 
   // 커뮤니티 프로필 모달 상태
   const [profileModalOpen, setProfileModalOpen] = useState<boolean>(false);
@@ -1852,10 +1857,32 @@ export default function AuraFitClient() {
     }
   };
 
+  const handleUrlCustomPhotoChange = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file || !urlPreview) return;
+    try {
+      const compressed = await compressImageToWebP(file, 1280, 0.84);
+      setUrlCustomBlob(compressed.blob);
+      setUrlCustomExt(compressed.ext);
+      setUrlCustomMime(compressed.mimeType);
+      setUrlPreview({
+        ...urlPreview,
+        image: compressed.dataUrl,
+        rawImageUrl: compressed.dataUrl,
+      });
+      showToast('썸네일 사진이 WebP로 최적화되어 적용되었습니다!');
+    } catch {
+      showToast('썸네일 이미지를 불러오지 못했습니다.');
+    }
+  };
+
   const fetchUrlMetadata = async (preset?: UrlPreviewData) => {
+    setUrlCustomBlob(null);
     if (preset) {
       setShopUrlInput(preset.url);
-      setUrlPreview(preset);
+      setUrlPreview({ ...preset, autoExtracted: true });
       setUrlStatus('구매 예정');
       return;
     }
@@ -1875,70 +1902,163 @@ export default function AuraFitClient() {
       });
       const json = await res.json();
       if (json?.success && json?.name) {
+        const cleanPageUrl =
+          typeof json.cleanUrl === 'string' && json.cleanUrl
+            ? json.cleanUrl
+            : trimmed;
+        const rawImg = typeof json.image === 'string' ? json.image.trim() : '';
+        const proxiedImg =
+          rawImg && /^https?:\/\//i.test(rawImg)
+            ? `/api/scrape?imageUrl=${encodeURIComponent(
+                rawImg
+              )}&referer=${encodeURIComponent(cleanPageUrl)}`
+            : rawImg;
+
+        setShopUrlInput(cleanPageUrl);
         setUrlPreview({
-          url: trimmed,
+          url: cleanPageUrl,
           store: json.store || 'ONLINE STORE',
           name: json.name,
           price: json.price || '실시간 링크 연동 상품',
           category: (json.category as CategoryType) || '상의',
           season: json.season || '사계절',
           image:
-            json.image ||
+            proxiedImg ||
             createSvgItem('#F4F4F5', '🛍️', json.store || 'STORE', 'URL ITEM'),
+          rawImageUrl: rawImg,
+          autoExtracted: true,
         });
         setIsFetchingUrl(false);
         return;
       }
     } catch {
-      // 폴백
+      // 수동 입력 모드로 전환
     }
 
-    const lower = trimmed.toLowerCase();
+    const urlOnlyMatch = trimmed.match(/https?:\/\/[^\s"'<>]+/i);
+    const normalizedUrl = urlOnlyMatch ? urlOnlyMatch[0] : trimmed;
+    const lower = normalizedUrl.toLowerCase();
     let storeName = 'ONLINE STORE';
     if (lower.includes('musinsa')) storeName = 'MUSINSA';
     else if (lower.includes('kream')) storeName = 'KREAM';
     else if (lower.includes('ably') || lower.includes('a-bly'))
       storeName = 'ABLY';
     else if (lower.includes('29cm')) storeName = '29CM';
+    else if (lower.includes('zigzag')) storeName = 'ZIGZAG';
     else if (lower.includes('zara')) storeName = 'ZARA';
 
     setUrlPreview({
-      url: trimmed,
+      url: normalizedUrl,
       store: storeName,
-      name: `[${storeName}] 에디토리얼 슬림핏 니트 가디건`,
-      price: '68,000원 (직접 수정 가능)',
+      name: '',
+      price: '자동 추출 제한 · 상품명과 사진을 직접 지정 가능',
       category: '상의',
-      season: '봄/가을',
-      image: createSvgItem('#F4F4F5', '🧶', storeName, 'URL LINKED'),
+      season: '사계절',
+      image: createSvgItem('#F4F4F5', '🔗', storeName, 'DIRECT INPUT'),
+      rawImageUrl: '',
+      autoExtracted: false,
     });
     setIsFetchingUrl(false);
+    showToast(
+      '해당 쇼핑몰의 보안 정책으로 자동 추출이 제한되어 직접 입력 카드로 열렸습니다.'
+    );
   };
 
   const confirmUrlClothUpload = async () => {
     if (!urlPreview) return;
-    const created = await insertClothItem({
-      name: urlPreview.name.trim() || '링크 연동 아이템',
-      category: urlPreview.category,
-      season: urlPreview.season,
-      status: urlStatus,
-      sourceUrl: urlPreview.url,
-      image: urlPreview.image,
-    });
+    const cleanName = urlPreview.name.trim();
+    if (!cleanName) {
+      showToast('등록할 상품명을 먼저 입력해 주세요.');
+      return;
+    }
 
-    setWardrobe((prev) => [created, ...prev]);
-    setSelectedClothIds((prev) => [
-      ...prev.filter((cid) => {
-        const found = wardrobe.find((w) => w.id === cid);
-        return found ? found.category !== created.category : true;
-      }),
-      created.id,
-    ]);
-    setUrlPreview(null);
-    setShopUrlInput('');
-    setUploadModalOpen(false);
-    showToast(
-      `쇼핑몰 링크 상품('${created.status}')이 옷장 등록 및 코디 슬롯에 선택되었습니다!`
-    );
+    setIsUploadingCloth(true);
+    try {
+      let finalImageUrl = urlPreview.rawImageUrl || urlPreview.image;
+      let storedInBucket = false;
+
+      if (authUser && supabaseClient) {
+        let blobToUpload: Blob | null = urlCustomBlob;
+        let extToUpload: 'webp' | 'jpg' = urlCustomExt;
+        let mimeToUpload: string = urlCustomMime;
+
+        // 프록시된 실제 쇼핑몰 상품 이미지가 있으면 자동으로 WebP 변환 후 내 Storage 버킷에 영구 저장
+        if (
+          !blobToUpload &&
+          urlPreview.image.startsWith('/api/scrape?imageUrl=')
+        ) {
+          try {
+            const imgResp = await fetch(urlPreview.image);
+            if (imgResp.ok) {
+              const fetchedBlob = await imgResp.blob();
+              const tempFile = new File(
+                [fetchedBlob],
+                'scraped-product.jpg',
+                { type: fetchedBlob.type || 'image/jpeg' }
+              );
+              const compressed = await compressImageToWebP(tempFile, 1280, 0.84);
+              blobToUpload = compressed.blob;
+              extToUpload = compressed.ext;
+              mimeToUpload = compressed.mimeType;
+            }
+          } catch {
+            // 프록시 변환 실패 시 원본 이미지 URL 유지
+          }
+        }
+
+        if (blobToUpload) {
+          const uniqueName = `${Date.now()}_${Math.random()
+            .toString(36)
+            .slice(2, 8)}.${extToUpload}`;
+          const storagePath = `${authUser.id}/${uniqueName}`;
+          const { error: upErr } = await supabaseClient.storage
+            .from(STORAGE_BUCKET)
+            .upload(storagePath, blobToUpload, {
+              contentType: mimeToUpload,
+              cacheControl: '3600',
+              upsert: false,
+            });
+          if (!upErr) {
+            const { data: pubData } = supabaseClient.storage
+              .from(STORAGE_BUCKET)
+              .getPublicUrl(storagePath);
+            if (pubData?.publicUrl) {
+              finalImageUrl = pubData.publicUrl;
+              storedInBucket = true;
+            }
+          }
+        }
+      }
+
+      const created = await insertClothItem({
+        name: cleanName,
+        category: urlPreview.category,
+        season: urlPreview.season,
+        status: urlStatus,
+        sourceUrl: urlPreview.url,
+        image: finalImageUrl,
+      });
+
+      setWardrobe((prev) => [created, ...prev]);
+      setSelectedClothIds((prev) => [
+        ...prev.filter((cid) => {
+          const found = wardrobe.find((w) => w.id === cid);
+          return found ? found.category !== created.category : true;
+        }),
+        created.id,
+      ]);
+      setUrlPreview(null);
+      setUrlCustomBlob(null);
+      setShopUrlInput('');
+      setUploadModalOpen(false);
+      showToast(
+        storedInBucket
+          ? `☁️ '${created.name}' 상품 이미지(WebP)와 링크가 내 클라우드 옷장에 저장되었습니다!`
+          : `쇼핑몰 링크 상품('${created.name}')이 옷장 등록 및 코디 슬롯에 선택되었습니다!`
+      );
+    } finally {
+      setIsUploadingCloth(false);
+    }
   };
 
   const deleteCloth = async (id: number) => {
@@ -2650,6 +2770,7 @@ export default function AuraFitClient() {
                     >
                       <div className="aspect-[4/4.5] overflow-hidden bg-zinc-100 relative">
                         <img
+                            referrerPolicy="no-referrer"
                           src={item.image}
                           alt={item.name}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -2736,6 +2857,7 @@ export default function AuraFitClient() {
                         className="relative w-9 h-9 rounded-lg overflow-hidden border border-white/40 bg-white shrink-0 cursor-pointer group"
                       >
                         <img
+                            referrerPolicy="no-referrer"
                           src={item.image}
                           alt={item.name}
                           className="w-full h-full object-cover"
@@ -3024,6 +3146,7 @@ export default function AuraFitClient() {
                               ✓
                             </span>
                             <img
+                            referrerPolicy="no-referrer"
                               src={matched.image}
                               alt={matched.name}
                               className="w-full h-16 sm:h-20 object-cover rounded-xl bg-white mx-auto mb-1.5"
@@ -3085,6 +3208,7 @@ export default function AuraFitClient() {
                           >
                             <div className="relative aspect-square rounded-lg overflow-hidden bg-zinc-100 mb-1.5">
                               <img
+                            referrerPolicy="no-referrer"
                                 src={item.image}
                                 alt={item.name}
                                 className="w-full h-full object-cover"
@@ -3222,6 +3346,7 @@ export default function AuraFitClient() {
                                     }`}
                                   >
                                     <img
+                            referrerPolicy="no-referrer"
                                       src={topItem.image}
                                       alt={topItem.name}
                                       className="w-full h-full object-cover"
@@ -3238,6 +3363,7 @@ export default function AuraFitClient() {
                                       }`}
                                     >
                                       <img
+                            referrerPolicy="no-referrer"
                                         src={outerItem.image}
                                         alt={outerItem.name}
                                         className="w-full h-full object-cover"
@@ -3255,6 +3381,7 @@ export default function AuraFitClient() {
                                     }`}
                                   >
                                     <img
+                            referrerPolicy="no-referrer"
                                       src={bottomItem.image}
                                       alt={bottomItem.name}
                                       className="w-full h-full object-cover"
@@ -3271,6 +3398,7 @@ export default function AuraFitClient() {
                                     }`}
                                   >
                                     <img
+                            referrerPolicy="no-referrer"
                                       src={shoeItem.image}
                                       alt={shoeItem.name}
                                       className="w-full h-full object-cover"
@@ -3286,6 +3414,7 @@ export default function AuraFitClient() {
                                     }`}
                                   >
                                     <img
+                            referrerPolicy="no-referrer"
                                       src={accItem.image}
                                       alt={accItem.name}
                                       className="w-full h-full object-cover"
@@ -3355,6 +3484,7 @@ export default function AuraFitClient() {
                                   </span>
                                 )}
                                 <img
+                            referrerPolicy="no-referrer"
                                   src={item.image}
                                   alt={item.name}
                                   className="w-full h-14 object-cover rounded-lg mb-1 bg-white"
@@ -3569,6 +3699,7 @@ export default function AuraFitClient() {
                         <div className="grid grid-cols-4 gap-1.5">
                           {user.closet.slice(0, 4).map((c) => (
                             <img
+                            referrerPolicy="no-referrer"
                               key={c.id}
                               src={c.image}
                               alt={c.name}
@@ -3664,6 +3795,7 @@ export default function AuraFitClient() {
                     <div className="grid grid-cols-3 gap-2">
                       {look.items.slice(0, 3).map((i) => (
                         <img
+                            referrerPolicy="no-referrer"
                           key={i.id}
                           src={i.image}
                           alt={i.name}
@@ -4163,6 +4295,7 @@ export default function AuraFitClient() {
                   {photoDataUrl && (
                     <div className="mt-2.5 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-3">
                       <img
+                            referrerPolicy="no-referrer"
                         src={photoDataUrl}
                         alt="압축 미리보기"
                         className="w-12 h-12 rounded-lg object-cover border border-emerald-200 bg-white shrink-0"
@@ -4264,10 +4397,16 @@ export default function AuraFitClient() {
                   </label>
                   <div className="flex gap-2">
                     <input
-                      type="url"
+                      type="text"
                       value={shopUrlInput}
                       onChange={(e) => setShopUrlInput(e.target.value)}
-                      placeholder="https://www.musinsa.com/products/..."
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          fetchUrlMetadata();
+                        }
+                      }}
+                      placeholder="https://kream.co.kr/products/... 또는 공유 링크 붙여넣기"
                       className="flex-1 px-3.5 py-2.5 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
                     />
                     <button
@@ -4321,34 +4460,64 @@ export default function AuraFitClient() {
 
                 {urlPreview && (
                   <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3.5 space-y-3">
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={urlPreview.image}
-                        alt="상품 썸네일"
-                        className="w-16 h-20 object-cover rounded-lg border border-zinc-200 bg-white shrink-0"
-                      />
-                      <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-start gap-3">
+                      <div className="shrink-0 flex flex-col items-center gap-1">
+                        <img
+                            referrerPolicy="no-referrer"
+                          src={urlPreview.image}
+                          alt="상품 썸네일"
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            e.currentTarget.src = createSvgItem(
+                              '#F4F4F5',
+                              '🛍️',
+                              urlPreview.store,
+                              'ITEM'
+                            );
+                          }}
+                          className="w-16 h-20 object-cover rounded-lg border border-zinc-200 bg-white"
+                        />
+                        <label className="text-[10px] font-semibold text-indigo-600 hover:underline cursor-pointer">
+                          사진 변경
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleUrlCustomPhotoChange}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-1.5">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="px-2 py-0.5 rounded bg-zinc-900 text-white text-[10px] font-bold">
                             {urlPreview.store}
                           </span>
-                          <span className="text-[10px] text-emerald-600 font-semibold">
-                            ✓ 서버 메타데이터 & 카테고리 자동 인식
-                          </span>
+                          {urlPreview.autoExtracted !== false ? (
+                            <span className="text-[10px] text-emerald-600 font-semibold">
+                              ✓ 실제 상품명 · 이미지 추출 완료
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-amber-600 font-semibold">
+                              ⚠️ 자동 추출 제한됨 · 상품명을 직접 입력해 주세요
+                            </span>
+                          )}
                         </div>
                         <input
                           type="text"
                           value={urlPreview.name}
+                          placeholder="상품명을 직접 입력해 주세요 (예: 나이키 ACG 자켓)"
                           onChange={(e) =>
                             setUrlPreview({
                               ...urlPreview,
                               name: e.target.value,
                             })
                           }
-                          className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-900 text-xs font-bold focus:outline-none"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-900 text-xs font-bold focus:outline-none focus:border-zinc-900"
                         />
                         <p className="text-[11px] text-zinc-500">
-                          상품 정보 추출 완료 · {urlPreview.price}
+                          {urlPreview.autoExtracted !== false
+                            ? `실제 상품 연동 · ${urlPreview.price}`
+                            : urlPreview.price}
                         </p>
                       </div>
                     </div>
@@ -4416,10 +4585,13 @@ export default function AuraFitClient() {
 
                     <button
                       type="button"
+                      disabled={isUploadingCloth}
                       onClick={confirmUrlClothUpload}
-                      className="w-full py-3 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 transition cursor-pointer"
+                      className="w-full py-3 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 transition cursor-pointer disabled:opacity-50"
                     >
-                      이 상품 내 옷장에 추가하기
+                      {isUploadingCloth
+                        ? '☁️ 상품 썸네일 WebP 최적화 & 저장 중...'
+                        : '이 상품 내 옷장에 추가하기'}
                     </button>
                   </div>
                 )}
@@ -4590,6 +4762,7 @@ export default function AuraFitClient() {
                     >
                       <div className="relative aspect-square rounded-lg overflow-hidden bg-zinc-100 mb-2">
                         <img
+                            referrerPolicy="no-referrer"
                           src={item.image}
                           alt={item.name}
                           className="w-full h-full object-cover"
@@ -4640,6 +4813,7 @@ export default function AuraFitClient() {
                         >
                           <div className="relative">
                             <img
+                            referrerPolicy="no-referrer"
                               src={item.image}
                               alt={item.name}
                               className="w-full h-20 object-cover rounded-lg mb-1.5 bg-zinc-100"
@@ -4711,6 +4885,7 @@ export default function AuraFitClient() {
                                 className="relative w-16 text-center cursor-pointer"
                               >
                                 <img
+                            referrerPolicy="no-referrer"
                                   src={it.image}
                                   alt={it.name}
                                   className="w-16 h-16 object-cover rounded-xl border-2 border-rose-500 shadow-sm bg-white mx-auto"
@@ -4812,6 +4987,7 @@ export default function AuraFitClient() {
                               className="shrink-0 w-16 text-center"
                             >
                               <img
+                            referrerPolicy="no-referrer"
                                 src={it.image}
                                 alt={it.name}
                                 className="w-16 h-16 object-cover rounded-lg border border-zinc-200 bg-white"
