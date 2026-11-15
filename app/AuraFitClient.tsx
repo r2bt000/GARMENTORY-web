@@ -1906,13 +1906,37 @@ export default function AuraFitClient() {
           typeof json.cleanUrl === 'string' && json.cleanUrl
             ? json.cleanUrl
             : trimmed;
+        const serverDataUrl =
+          typeof json.imageDataUrl === 'string' ? json.imageDataUrl.trim() : '';
         const rawImg = typeof json.image === 'string' ? json.image.trim() : '';
-        const proxiedImg =
-          rawImg && /^https?:\/\//i.test(rawImg)
-            ? `/api/scrape?imageUrl=${encodeURIComponent(
-                rawImg
-              )}&referer=${encodeURIComponent(cleanPageUrl)}`
-            : rawImg;
+
+        let readyDisplayUrl = '';
+        if (serverDataUrl.startsWith('data:image/')) {
+          try {
+            const respBlob = await (await fetch(serverDataUrl)).blob();
+            const f = new File([respBlob], 'product.jpg', {
+              type: respBlob.type || 'image/jpeg',
+            });
+            const comp = await compressImageToWebP(f, 1080, 0.84);
+            readyDisplayUrl = comp.dataUrl;
+            setUrlCustomBlob(comp.blob);
+            setUrlCustomExt(comp.ext);
+            setUrlCustomMime(comp.mimeType);
+          } catch {
+            readyDisplayUrl = serverDataUrl;
+          }
+        } else if (rawImg && /^https?:\/\//i.test(rawImg)) {
+          readyDisplayUrl = `/api/scrape?imageUrl=${encodeURIComponent(
+            rawImg
+          )}&referer=${encodeURIComponent(cleanPageUrl)}`;
+        }
+
+        const fallbackSvg = createSvgItem(
+          '#F4F4F5',
+          '🛍️',
+          json.store || 'STORE',
+          'URL ITEM'
+        );
 
         setShopUrlInput(cleanPageUrl);
         setUrlPreview({
@@ -1922,10 +1946,8 @@ export default function AuraFitClient() {
           price: json.price || '실시간 링크 연동 상품',
           category: (json.category as CategoryType) || '상의',
           season: json.season || '사계절',
-          image:
-            proxiedImg ||
-            createSvgItem('#F4F4F5', '🛍️', json.store || 'STORE', 'URL ITEM'),
-          rawImageUrl: rawImg,
+          image: readyDisplayUrl || fallbackSvg,
+          rawImageUrl: readyDisplayUrl || fallbackSvg,
           autoExtracted: true,
         });
         setIsFetchingUrl(false);
@@ -1974,7 +1996,7 @@ export default function AuraFitClient() {
 
     setIsUploadingCloth(true);
     try {
-      let finalImageUrl = urlPreview.rawImageUrl || urlPreview.image;
+      let finalImageUrl = urlPreview.image || urlPreview.rawImageUrl || createSvgItem('#F4F4F5', '🛍️', urlPreview.store, 'ITEM');
       let storedInBucket = false;
 
       if (authUser && supabaseClient) {
@@ -2770,9 +2792,18 @@ export default function AuraFitClient() {
                     >
                       <div className="aspect-[4/4.5] overflow-hidden bg-zinc-100 relative">
                         <img
-                            referrerPolicy="no-referrer"
+                          referrerPolicy="no-referrer"
                           src={item.image}
                           alt={item.name}
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = createSvgItem(
+                              '#F4F4F5',
+                              '🧥',
+                              item.category,
+                              'URL ITEM'
+                            );
+                          }}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         />
 
