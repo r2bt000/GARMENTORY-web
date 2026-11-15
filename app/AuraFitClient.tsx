@@ -136,15 +136,24 @@ interface ToastItem {
 }
 
 const STORAGE_KEYS = {
-  WARDROBE: 'aurafit_touch_wardrobe_v4',
-  SAVED_LOOKS: 'aurafit_touch_saved_v4',
-  COMMUNITY: 'aurafit_touch_community_v4',
-  SELECTED_IDS: 'aurafit_touch_selected_v4',
-  THEME: 'aurafit_touch_theme_v4',
-  CONFIG: 'aurafit_touch_api_cfg_v4',
+  WARDROBE: 'oblique_wardrobe_v5',
+  SAVED_LOOKS: 'oblique_saved_v5',
+  COMMUNITY: 'oblique_community_v5',
+  SELECTED_IDS: 'oblique_selected_v5',
+  THEME: 'oblique_theme_v5',
+  CONFIG: 'oblique_api_cfg_v5',
 };
 
-const STEP2_SQL_SCHEMA = `-- AuraFit 2단계: 멀티유저 정식 운영용 Supabase PostgreSQL 스키마 & RLS 보안 정책
+const LEGACY_SAMPLE_ITEM_NAMES = new Set([
+  '오버핏 헤비웨이트 화이트 티셔츠',
+  '다크 인디고 와이드 셀비지 데님',
+  '구조적 숄더 블랙 싱글 블레이저',
+  '빈티지 카키 개버딘 트렌치코트',
+  '청키 솔 블랙 레더 더비 로퍼',
+  '925 실버 볼 체인 네크리스',
+]);
+
+const STEP2_SQL_SCHEMA = `-- OBLIQUE 2단계: 멀티유저 정식 운영용 Supabase PostgreSQL 스키마 & RLS 보안 정책
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   handle text not null,
@@ -219,7 +228,7 @@ create policy "Target user or proposer can delete proposal" on public.outfit_pro
 const STORAGE_BUCKET = 'wardrobe-images';
 
 const STEP3_STORAGE_SQL = `-- =====================================================================
--- OBLIQUE (AuraFit) 3단계: Supabase Storage 의류 이미지 전용 버킷 & RLS 보안 정책
+-- OBLIQUE 3단계: Supabase Storage 의류 이미지 전용 버킷 & RLS 보안 정책
 -- 실행 위치: Supabase Dashboard -> SQL Editor -> New Query 붙여넣기 후 [Run] 클릭
 -- 공식 참고: https://supabase.com/docs/guides/storage/buckets/creating-buckets
 --           https://supabase.com/docs/guides/storage/security/access-control
@@ -437,244 +446,18 @@ const createSvgItem = (
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 };
 
-const defaultWardrobe: ClothItem[] = [
-  {
-    id: 101,
-    name: '오버핏 헤비웨이트 화이트 티셔츠',
-    category: '상의',
-    season: '사계절',
-    status: '보유 중',
-    sourceUrl: '',
-    image: createSvgItem('#F4F4F5', '👕', 'HEAVY WHITE TEE', 'TOP · COTTON'),
-  },
-  {
-    id: 102,
-    name: '다크 인디고 와이드 셀비지 데님',
-    category: '하의',
-    season: '사계절',
-    status: '보유 중',
-    sourceUrl: '',
-    image: createSvgItem('#E4E4E7', '👖', 'WIDE SELVEDGE', 'BOTTOM · DENIM'),
-  },
-  {
-    id: 103,
-    name: '구조적 숄더 블랙 싱글 블레이저',
-    category: '아우터',
-    season: '봄/가을',
-    status: '보유 중',
-    sourceUrl: '',
-    image: createSvgItem('#D4D4D8', '🧥', 'STRUCTURED BLAZER', 'OUTER · TAILORED'),
-  },
-  {
-    id: 104,
-    name: '빈티지 카키 개버딘 트렌치코트',
-    category: '아우터',
-    season: '봄/가을',
-    status: '보유 중',
-    sourceUrl: '',
-    image: createSvgItem('#E7E5E4', '🧥', 'TRENCH COAT', 'OUTER · GABARDINE'),
-  },
-  {
-    id: 105,
-    name: '청키 솔 블랙 레더 더비 로퍼',
-    category: '신발',
-    season: '사계절',
-    status: '보유 중',
-    sourceUrl: '',
-    image: createSvgItem('#F4F4F5', '👞', 'CHUNKY DERBY', 'SHOES · LEATHER'),
-  },
-  {
-    id: 106,
-    name: '925 실버 볼 체인 네크리스',
-    category: '악세사리',
-    season: '사계절',
-    status: '보유 중',
-    sourceUrl: '',
-    image: createSvgItem('#E4E4E7', '⛓️', '925 SILVER CHAIN', 'ACC · HARDWARE'),
-  },
-];
+const defaultWardrobe: ClothItem[] = [];
 
 const defaultCommunityUsers: CommunityUser[] = [
   {
     id: 'me',
-    handle: '@my_aurafit_closet',
+    handle: '@my_oblique_closet',
     badge: '나의 오픈 옷장',
-    dna: ['Editorial Minimal', 'Subculture Mix', 'KREAM Digging'],
+    dna: ['OBLIQUE Member', 'Digital Closet'],
     request:
-      '제 옷장에 있는 아이템들을 터치해서 출근룩이나 주말 전시회 코디 자유롭게 조합해 주세요!',
+      '제 옷장에 있는 아이템들을 터치해서 어울리는 코디를 자유롭게 조합해 주세요!',
     isPublic: true,
     closet: [],
-    proposals: [
-      {
-        id: 'p_init_1',
-        proposer: '@seoul_archive',
-        note: '구조적 블랙 블레이저 안에 화이트 티셔츠를 받쳐 입고, 셀비지 데님과 실버 체인을 매치하면 실패 없는 한남동 에디토리얼 룩입니다!',
-        itemIds: [103, 101, 102, 106],
-        likes: 5,
-        createdAt: '방금 전',
-      },
-      {
-        id: 'p_init_2',
-        proposer: '@abyss_punk',
-        note: '다크모드 감성으로 블레이저에 청키 더비 로퍼, 실버 볼 체인을 과감하게 레이어드해 보세요.',
-        itemIds: [103, 105, 106],
-        likes: 3,
-        createdAt: '1시간 전',
-      },
-    ],
-  },
-  {
-    id: 'u1',
-    handle: '@seoul_archive',
-    badge: '에디토리얼 러버',
-    dna: ['Maison Margiela', 'Minimal Tailoring', 'Old Money'],
-    request:
-      '이번 주말 한남동 전시회 가는데, 제 옷장에 있는 블랙 블레이저랑 와이드 팬츠로 너무 딱딱하지 않은 핀터레스트 감성 코디 짜주실 분!',
-    closet: [
-      {
-        id: 201,
-        name: '오버핏 울 블랙 블레이저',
-        category: '아우터',
-        season: '봄/가을',
-        status: '보유 중',
-        image: createSvgItem('#E4E4E7', '🧥', 'WOOL BLAZER', 'OUTER'),
-      },
-      {
-        id: 202,
-        name: '크림 코튼 투턱 와이드 팬츠',
-        category: '하의',
-        season: '사계절',
-        status: '보유 중',
-        image: createSvgItem('#F4F4F5', '👖', 'CREAM PANTS', 'BOTTOM'),
-      },
-      {
-        id: 203,
-        name: '블루 스트라이프 옥스포드 셔츠',
-        category: '상의',
-        season: '사계절',
-        status: '보유 중',
-        image: createSvgItem('#E0F2FE', '👔', 'STRIPE SHIRT', 'TOP'),
-      },
-      {
-        id: 204,
-        name: '빈티지 레더 크로스 메신저백',
-        category: '악세사리',
-        season: '사계절',
-        status: '보유 중',
-        image: createSvgItem('#D4D4D8', '👜', 'LEATHER BAG', 'ACC'),
-      },
-      {
-        id: 205,
-        name: '스퀘어토 블랙 첼시 부츠',
-        category: '신발',
-        season: '사계절',
-        status: '구매 예정',
-        image: createSvgItem('#E4E4E7', '🥾', 'CHELSEA BOOTS', 'WISHLIST'),
-      },
-    ],
-    proposals: [
-      {
-        id: 'p_u1_1',
-        proposer: '@cityboy_kim',
-        note: '스트라이프 셔츠 단추를 하나 풀고 크림 와이드 팬츠에 블레이저를 툭 걸치면 핀터레스트 감성 제대로입니다.',
-        itemIds: [201, 203, 202],
-        likes: 7,
-        createdAt: '2시간 전',
-      },
-    ],
-  },
-  {
-    id: 'u2',
-    handle: '@abyss_punk',
-    badge: '다크 서브컬처',
-    dna: ['Rick Owens Archive', 'Neo Punk & Goth', 'Silver Hardware'],
-    request:
-      '평소 입는 디스트로이드 카고 팬츠에 펑크나 고스 느낌 제대로 내고 싶습니다. 제 옷장 아이템 조합이랑 필요한 악세사리 조언 부탁해요!',
-    closet: [
-      {
-        id: 301,
-        name: '디스트로이드 블랙 멀티 카고팬츠',
-        category: '하의',
-        season: '사계절',
-        status: '보유 중',
-        image: createSvgItem('#27272A', '👖', 'CARGO PANTS', 'DARK WEAR'),
-      },
-      {
-        id: 302,
-        name: '빈티지 메탈 밴드 워싱 롱슬리브',
-        category: '상의',
-        season: '사계절',
-        status: '보유 중',
-        image: createSvgItem('#3F3F46', '👕', 'BAND LONGSLEEVE', 'VINTAGE'),
-      },
-      {
-        id: 303,
-        name: '헤비 스터드 크롭 바이커 레더 자켓',
-        category: '아우터',
-        season: '봄/가을',
-        status: '보유 중',
-        image: createSvgItem('#18181B', '🧥', 'BIKER JACKET', 'LEATHER'),
-      },
-      {
-        id: 304,
-        name: '릭 오웬스 스타일 청키 플랫폼 부츠',
-        category: '신발',
-        season: '사계절',
-        status: '보유 중',
-        image: createSvgItem('#27272A', '🥾', 'PLATFORM BOOTS', 'CHUNKY'),
-      },
-      {
-        id: 305,
-        name: '고딕 크로스 실버 월렛 체인',
-        category: '악세사리',
-        season: '사계절',
-        status: '구매 예정',
-        image: createSvgItem('#3F3F46', '⛓️', 'WALLET CHAIN', 'WISHLIST'),
-      },
-    ],
-    proposals: [],
-  },
-  {
-    id: 'u3',
-    handle: '@cityboy_kim',
-    badge: '아메카지 & 시티보이',
-    dna: ['City Boy', 'Workwear', 'Vintage Denim'],
-    request:
-      '출근룩이랑 주말 데이트룩 겸용으로 입을 수 있게 코디 조합 좀 만들어 주세요. 옷은 몇 벌 없는데 활용법이 궁금해요.',
-    closet: [
-      {
-        id: 401,
-        name: '네이비 코튼 트윌 워크 자켓',
-        category: '아우터',
-        season: '봄/가을',
-        status: '보유 중',
-        image: createSvgItem('#E2E8F0', '🧥', 'WORK JACKET', 'OUTER'),
-      },
-      {
-        id: 402,
-        name: '베이지 와이드 투턱 치노팬츠',
-        category: '하의',
-        season: '사계절',
-        status: '보유 중',
-        image: createSvgItem('#FEF3C7', '👖', 'CHINO PANTS', 'BOTTOM'),
-      },
-      {
-        id: 403,
-        name: '멜란지 그레이 헤비웨이트 후드티',
-        category: '상의',
-        season: '봄/가을',
-        status: '보유 중',
-        image: createSvgItem('#E4E4E7', '👕', 'GRAY HOODIE', 'TOP'),
-      },
-      {
-        id: 404,
-        name: '스웨이드 메이플 클락스 왈라비',
-        category: '신발',
-        season: '사계절',
-        status: '보유 중',
-        image: createSvgItem('#FDE68A', '👞', 'WALLABEE', 'SHOES'),
-      },
-    ],
     proposals: [],
   },
 ];
@@ -849,13 +632,11 @@ export default function AuraFitClient() {
   const [savedLooks, setSavedLooks] = useState<SavedLook[]>([]);
   const [communityUsers, setCommunityUsers] =
     useState<CommunityUser[]>(defaultCommunityUsers);
-  const [selectedClothIds, setSelectedClothIds] = useState<number[]>([
-    103, 101, 102, 105, 106,
-  ]);
+  const [selectedClothIds, setSelectedClothIds] = useState<number[]>([]);
 
   // 2단계: Supabase Auth 멀티유저 상태
   const [authUser, setAuthUser] = useState<User | null>(null);
-  const [myHandle, setMyHandle] = useState<string>('@my_aurafit_closet');
+  const [myHandle, setMyHandle] = useState<string>('@my_oblique_closet');
   const [myStyleRequest, setMyStyleRequest] = useState<string>(
     '제 옷장에 있는 아이템들을 터치해서 출근룩이나 주말 전시회 코디 자유롭게 조합해 주세요!'
   );
@@ -920,7 +701,7 @@ export default function AuraFitClient() {
   const [activeProfileId, setActiveProfileId] = useState<string>('me');
   const [profileSubTab, setProfileSubTab] = useState<ProfileSubTab>('closet');
   const [proposalSelectedIds, setProposalSelectedIds] = useState<number[]>([]);
-  const [proposerName, setProposerName] = useState<string>('@aurafit_director');
+  const [proposerName, setProposerName] = useState<string>('@oblique_director');
   const [proposalNote, setProposalNote] = useState<string>('');
 
   // DB & AI API 설정 모달 상태
@@ -1027,7 +808,7 @@ export default function AuraFitClient() {
             user.user_metadata?.preferred_username ||
             user.user_metadata?.name ||
             user.email?.split('@')[0] ||
-            'aurafit_user'
+            'oblique_user'
           )
             .toLowerCase()
             .replace(/[^a-z0-9가-힣_]/g, '');
@@ -1068,71 +849,47 @@ export default function AuraFitClient() {
           .order('created_at', { ascending: false });
 
         if (!wErr && Array.isArray(wRows)) {
-          if (wRows.length === 0) {
-            // 신규 가입 유저 첫 진입 시 기본 샘플 6벌 자동 시딩 (1회만)
-            const seedFlag = `aurafit_seeded_${user.id}`;
-            let alreadySeeded = false;
-            try {
-              alreadySeeded = Boolean(localStorage.getItem(seedFlag));
-            } catch {}
-
-            if (!alreadySeeded) {
-              const seedPayload = defaultWardrobe.map((item) => ({
-                user_id: user.id,
-                name: item.name,
-                category: item.category,
-                season: item.season,
-                status: item.status,
-                source_url: item.sourceUrl || '',
-                image_url: item.image,
-              }));
-              const { data: inserted } = await client
-                .from('wardrobe_items')
-                .insert(seedPayload)
-                .select('*');
-              try {
-                localStorage.setItem(seedFlag, '1');
-              } catch {}
-              if (inserted && inserted.length > 0) {
-                const mapped: ClothItem[] = inserted.map((r) => ({
-                  id: Number(r.id),
-                  name: r.name,
-                  category: r.category as CategoryType,
-                  season: r.season,
-                  status: r.status as ClothStatus,
-                  sourceUrl: r.source_url || '',
-                  image: r.image_url,
-                }));
-                setWardrobe(mapped);
-                setSelectedClothIds(mapped.slice(0, 5).map((m) => m.id));
-              } else {
-                setWardrobe([]);
-                setSelectedClothIds([]);
-              }
-            } else {
-              setWardrobe([]);
-              setSelectedClothIds([]);
-            }
-          } else {
-            const mapped: ClothItem[] = wRows.map((r) => ({
-              id: Number(r.id),
-              name: r.name,
-              category: r.category as CategoryType,
-              season: r.season,
-              status: r.status as ClothStatus,
-              sourceUrl: r.source_url || '',
-              image: r.image_url,
-            }));
-            setWardrobe(mapped);
-            setSelectedClothIds((prev) => {
-              const stillValid = prev.filter((id) =>
-                mapped.some((m) => m.id === id)
-              );
-              return stillValid.length > 0
-                ? stillValid
-                : mapped.slice(0, 5).map((m) => m.id);
-            });
+          // 이전에 자동 삽입되었던 초기 샘플 의류(SVG 아이콘 6종)가 DB에 남아 있다면 즉시 자동 삭제
+          const legacySampleRows = wRows.filter(
+            (r) =>
+              LEGACY_SAMPLE_ITEM_NAMES.has(String(r.name || '')) &&
+              String(r.image_url || '').startsWith('data:image/svg+xml;utf8,')
+          );
+          if (legacySampleRows.length > 0) {
+            const legacyIds = legacySampleRows.map((r) => r.id);
+            await client
+              .from('wardrobe_items')
+              .delete()
+              .in('id', legacyIds)
+              .eq('user_id', user.id);
           }
+
+          const userRealRows = wRows.filter(
+            (r) =>
+              !(
+                LEGACY_SAMPLE_ITEM_NAMES.has(String(r.name || '')) &&
+                String(r.image_url || '').startsWith('data:image/svg+xml;utf8,')
+              )
+          );
+
+          const mapped: ClothItem[] = userRealRows.map((r) => ({
+            id: Number(r.id),
+            name: r.name,
+            category: r.category as CategoryType,
+            season: r.season,
+            status: r.status as ClothStatus,
+            sourceUrl: r.source_url || '',
+            image: r.image_url,
+          }));
+          setWardrobe(mapped);
+          setSelectedClothIds((prev) => {
+            const stillValid = prev.filter((id) =>
+              mapped.some((m) => m.id === id)
+            );
+            return stillValid.length > 0
+              ? stillValid
+              : mapped.slice(0, 5).map((m) => m.id);
+          });
         }
 
         // 3. 저장된 룩북 조회
@@ -1221,7 +978,10 @@ export default function AuraFitClient() {
               }));
             return {
               id: String(prof.id),
-              handle: prof.handle || '@aurafit_member',
+              handle: (prof.handle || '@oblique_member').replace(
+                /^@aurafit_/,
+                '@oblique_'
+              ),
               badge: prof.badge || 'LIVE 오픈 옷장',
               dna: Array.isArray(prof.dna)
                 ? prof.dna
@@ -1236,25 +996,28 @@ export default function AuraFitClient() {
             };
           });
 
+        const normalizedMyHandle = activeHandle.replace(
+          /^@aurafit_/,
+          '@oblique_'
+        );
+        if (normalizedMyHandle !== activeHandle) {
+          setMyHandle(normalizedMyHandle);
+          setProposerName(normalizedMyHandle);
+        }
+
         const meEntry: CommunityUser = {
           id: 'me',
-          handle: activeHandle,
+          handle: normalizedMyHandle,
           badge: '나의 클라우드 오픈 옷장',
-          dna: ['Authenticated', 'RLS Protected', 'Live Closet'],
+          dna: ['OBLIQUE Member', 'Live Closet'],
           request: activeReq,
           isPublic: activePub,
           isLiveCloudUser: true,
           closet: [],
-          proposals:
-            myProps.length > 0
-              ? myProps
-              : defaultCommunityUsers[0].proposals,
+          proposals: myProps,
         };
 
-        const showcaseOthers = defaultCommunityUsers.filter(
-          (u) => u.id !== 'me'
-        );
-        setCommunityUsers([meEntry, ...liveOthers, ...showcaseOthers]);
+        setCommunityUsers([meEntry, ...liveOthers]);
       } catch {
         // 테이블 미생성 상태에서도 앱이 멈추지 않도록 보호
       }
@@ -1426,7 +1189,7 @@ export default function AuraFitClient() {
     setWardrobe(defaultWardrobe);
     setSavedLooks([]);
     setCommunityUsers(defaultCommunityUsers);
-    setSelectedClothIds([103, 101, 102, 105, 106]);
+    setSelectedClothIds([]);
     setAuthModalOpen(false);
     showToast('로그아웃되어 게스트 체험 모드로 전환되었습니다.');
   };
@@ -1654,7 +1417,7 @@ export default function AuraFitClient() {
           ? '⚡ Gemini Server API 분석 완료'
           : apiConfig.fashnKey
           ? '✨ Virtual Try-On Pipeline Ready'
-          : '✨ AuraFit One-Tap Engine',
+          : '✨ OBLIQUE One-Tap Engine',
         title: aiTitle,
         note: aiStylistNote,
         items: picked,
@@ -2147,7 +1910,7 @@ export default function AuraFitClient() {
       return;
     }
 
-    const senderHandle = proposerName.trim() || myHandle || '@aurafit_stylist';
+    const senderHandle = proposerName.trim() || myHandle || '@oblique_stylist';
     const noteText =
       proposalNote.trim() ||
       '이 아이템들을 매치하면 실루엣과 톤앤매너가 가장 돋보입니다!';
@@ -2329,7 +2092,7 @@ export default function AuraFitClient() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `aurafit_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `oblique_backup_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
     showToast('옷장 및 코디 데이터 백업(JSON) 파일이 다운로드되었습니다.');
@@ -2369,9 +2132,9 @@ export default function AuraFitClient() {
     setWardrobe(defaultWardrobe);
     setSavedLooks([]);
     setCommunityUsers(defaultCommunityUsers);
-    setSelectedClothIds([103, 101, 102, 105, 106]);
+    setSelectedClothIds([]);
     setApiModalOpen(false);
-    showToast('초기 샘플 데이터 상태로 리셋되었습니다.');
+    showToast('로컬 임시 데이터가 비워졌습니다.');
   };
 
   const filteredWardrobe = wardrobe.filter((item) => {
@@ -2454,12 +2217,12 @@ export default function AuraFitClient() {
                   isDarkMode ? 'bg-rose-600' : 'bg-zinc-900'
                 }`}
               >
-                A
+                O
               </div>
-              <div className="w-[96px] sm:w-[132px] shrink-0">
+              <div className="w-[104px] sm:w-[140px] shrink-0">
                 <div className="flex items-center gap-1">
                   <h1 className="text-base sm:text-lg font-bold tracking-tight leading-none">
-                    AURAFIT
+                    OBLIQUE
                   </h1>
                   <span className="text-[9px] font-extrabold px-1 sm:px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 border border-emerald-500/30">
                     AUTH
@@ -2764,8 +2527,9 @@ export default function AuraFitClient() {
                     : 'border-zinc-200 text-zinc-400'
                 }`}
               >
-                해당 조건의 의류가 없습니다. 새 의류 등록하기 버튼으로 사진이나
-                쇼핑몰 링크를 추가해 보세요!
+                {wardrobe.length === 0
+                  ? '아직 등록된 내 의류가 없습니다. 우측 상단 "+ 새 의류 등록하기" 버튼으로 직접 찍은 사진이나 쇼핑몰 링크를 추가해 보세요!'
+                  : '해당 카테고리에 등록된 의류가 없습니다.'}
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
@@ -3335,7 +3099,7 @@ export default function AuraFitClient() {
                             Virtual Try-On 화보
                           </span>
                           <span className="text-[10px] font-mono text-zinc-600 bg-white/85 px-1.5 py-0.5 rounded">
-                            AURAFIT #26
+                            OBLIQUE #26
                           </span>
                         </div>
 
@@ -3656,6 +3420,22 @@ export default function AuraFitClient() {
               </button>
             </div>
 
+            {communityUsers.filter((u) => u.id !== 'me').length === 0 ? (
+              <div
+                className={`py-16 px-6 text-center rounded-2xl border border-dashed space-y-2 ${
+                  isDarkMode
+                    ? 'border-zinc-800 bg-zinc-900/40 text-zinc-400'
+                    : 'border-zinc-200 bg-white text-zinc-500'
+                }`}
+              >
+                <p className="text-sm font-bold">
+                  현재 공개된 다른 회원의 오픈 옷장이 없습니다.
+                </p>
+                <p className="text-xs opacity-80">
+                  가상 예시 인물을 모두 제거했습니다. 실제 회원이 가입하여 옷장을 공개하면 이곳에 실시간으로 표시됩니다!
+                </p>
+              </div>
+            ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               {communityUsers
                 .filter((u) => u.id !== 'me')
@@ -3769,6 +3549,7 @@ export default function AuraFitClient() {
                   </div>
                 ))}
             </div>
+            )}
           </section>
         )}
 
@@ -3941,7 +3722,7 @@ export default function AuraFitClient() {
                   <h3 className="text-base font-bold">
                     {authUser
                       ? '내 클라우드 옷장 계정 관리'
-                      : 'AuraFit 클라우드 옷장 로그인 · 가입'}
+                      : 'OBLIQUE 클라우드 옷장 로그인 · 가입'}
                   </h3>
                   <p className="text-[11px] text-zinc-400">
                     Supabase Auth & RLS 보안으로 내 옷장과 룩북을 안전하게
@@ -4195,7 +3976,7 @@ export default function AuraFitClient() {
 
             <div className="space-y-2">
               <p className="text-[11px] font-mono text-zinc-400">
-                AURAFIT EDITORIAL ARCHIVE · 2026
+                OBLIQUE EDITORIAL ARCHIVE · 2026
               </p>
               <h3 className="text-xl sm:text-2xl font-bold leading-snug font-editorial">
                 {currentArticle.headline}
@@ -5132,7 +4913,7 @@ export default function AuraFitClient() {
                     onClick={resetAllDatabase}
                     className="px-3 py-1.5 rounded-lg bg-white border border-rose-200 text-rose-600 text-xs font-semibold hover:bg-rose-50 transition cursor-pointer sm:ml-auto"
                   >
-                    초기 샘플 상태로 리셋
+                    로컬 옷장 비우기
                   </button>
                 )}
               </div>
