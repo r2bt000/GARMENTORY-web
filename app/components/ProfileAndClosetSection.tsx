@@ -3,9 +3,11 @@
 import React, { useState } from 'react';
 import {
   ArrowLeft,
+  Camera,
   Check,
   ExternalLink,
   Heart,
+  MessageCircle,
   Pencil,
   Plus,
   Send,
@@ -20,6 +22,7 @@ import {
   type MyProfileSubTab,
   type OtherProfileSubTab,
   type Proposal,
+  type ProposalReply,
   type SavedLook,
   type StylePost,
 } from '../lib/socialConstants';
@@ -30,8 +33,9 @@ interface ProfileAndClosetProps {
   myUserId: string | null;
   isLoggedIn: boolean;
   userPosts: StylePost[];
-  followerUsers: { id: string; handle: string }[];
-  followingUsers: { id: string; handle: string }[];
+  followerUsers: { id: string; handle: string; avatarUrl?: string }[];
+  followingUsers: { id: string; handle: string; avatarUrl?: string }[];
+  avatarByUserId: Map<string, string>;
   isFollowingTarget: boolean;
   // My profile exclusive props
   mySubTab: MyProfileSubTab;
@@ -45,7 +49,12 @@ interface ProfileAndClosetProps {
   savedLooks: SavedLook[];
   onDeleteSavedLook: (id: number) => void;
   onZoomImage: (url: string) => void;
-  onUpdateMyProfile: (nextHandle: string, nextBio: string) => Promise<void>;
+  onUpdateMyProfile: (
+    nextHandle: string,
+    nextBio: string,
+    avatarFile: File | null,
+    removeAvatar: boolean
+  ) => Promise<void>;
   onOpenAuth: () => void;
   onDeleteMyPost: (post: StylePost) => Promise<void>;
   // Other user profile & proposal props
@@ -59,7 +68,17 @@ interface ProfileAndClosetProps {
     pickedIds: number[],
     note: string
   ) => Promise<void>;
-  onLikeProposal: (targetUserId: string, prop: Proposal) => Promise<void>;
+  onToggleLikeProposal: (targetUserId: string, prop: Proposal) => Promise<void>;
+  onAddProposalReply: (
+    targetUserId: string,
+    prop: Proposal,
+    replyText: string
+  ) => Promise<void>;
+  onDeleteProposalReply: (
+    targetUserId: string,
+    prop: Proposal,
+    reply: ProposalReply
+  ) => Promise<void>;
   onAdoptProposalToSaved: (prop: Proposal) => Promise<void>;
 }
 
@@ -73,6 +92,36 @@ const CLOSET_FILTERS: (CategoryType | '전체' | '구매 예정')[] = [
   '구매 예정',
 ];
 
+function ProfileAvatar({
+  avatarUrl,
+  handle,
+  sizeClass,
+}: {
+  avatarUrl?: string;
+  handle: string;
+  sizeClass: string;
+}) {
+  if (avatarUrl) {
+    return (
+      <img
+        referrerPolicy="no-referrer"
+        src={avatarUrl}
+        alt={handle}
+        className={`${sizeClass} rounded-full object-cover bg-[#F4F4F5] shrink-0`}
+      />
+    );
+  }
+  const initials =
+    handle.replace(/^@/, '').slice(0, 2).toUpperCase() || '87';
+  return (
+    <div
+      className={`${sizeClass} rounded-full bg-zinc-950 text-white flex items-center justify-center font-black tracking-tight shrink-0 select-none`}
+    >
+      {initials}
+    </div>
+  );
+}
+
 export default function ProfileAndClosetSection({
   mode,
   profileUser,
@@ -81,6 +130,7 @@ export default function ProfileAndClosetSection({
   userPosts,
   followerUsers,
   followingUsers,
+  avatarByUserId,
   isFollowingTarget,
   mySubTab,
   onChangeMySubTab,
@@ -102,7 +152,9 @@ export default function ProfileAndClosetSection({
   onToggleFollowTarget,
   onVisitUserProfile,
   onSubmitProposalToUser,
-  onLikeProposal,
+  onToggleLikeProposal,
+  onAddProposalReply,
+  onDeleteProposalReply,
   onAdoptProposalToSaved,
 }: ProfileAndClosetProps) {
   const [closetFilter, setClosetFilter] =
@@ -110,9 +162,14 @@ export default function ProfileAndClosetSection({
   const [editProfileOpen, setEditProfileOpen] = useState<boolean>(false);
   const [handleDraft, setHandleDraft] = useState<string>(profileUser.handle);
   const [bioDraft, setBioDraft] = useState<string>(profileUser.bio);
+  const [avatarDraftFile, setAvatarDraftFile] = useState<File | null>(null);
+  const [avatarDraftPreview, setAvatarDraftPreview] = useState<string>(
+    profileUser.avatarUrl || ''
+  );
+  const [removeAvatarFlag, setRemoveAvatarFlag] = useState<boolean>(false);
   const [isSavingProfile, setIsSavingProfile] = useState<boolean>(false);
 
-  // 팔로워 / 팔로잉 리스트 모달
+  // 팔로워 / 팔로잉 리스트 모달 (무색 블러 적용)
   const [followModalType, setFollowModalType] = useState<
     'followers' | 'following' | null
   >(null);
@@ -121,6 +178,14 @@ export default function ProfileAndClosetSection({
   const [proposalIds, setProposalIds] = useState<number[]>([]);
   const [proposalNote, setProposalNote] = useState<string>('');
   const [isSendingProposal, setIsSendingProposal] = useState<boolean>(false);
+
+  // 코디 제안 답글 입력 상태 (제안 ID별 입력값)
+  const [replyDraftMap, setReplyDraftMap] = useState<Record<string, string>>(
+    {}
+  );
+  const [submittingReplyPropId, setSubmittingReplyPropId] = useState<
+    string | null
+  >(null);
 
   const filteredCloset = profileUser.closet.filter((item) => {
     if (closetFilter === '전체') return true;
@@ -151,15 +216,47 @@ export default function ProfileAndClosetSection({
     }
   };
 
+  const handleAvatarFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setAvatarDraftFile(f);
+    setRemoveAvatarFlag(false);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAvatarDraftPreview(String(reader.result || ''));
+    };
+    reader.readAsDataURL(f);
+  };
+
   const handleSaveProfileForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSavingProfile) return;
     setIsSavingProfile(true);
     try {
-      await onUpdateMyProfile(handleDraft, bioDraft);
+      await onUpdateMyProfile(
+        handleDraft,
+        bioDraft,
+        avatarDraftFile,
+        removeAvatarFlag
+      );
+      setAvatarDraftFile(null);
+      setRemoveAvatarFlag(false);
       setEditProfileOpen(false);
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const handleReplySubmit = async (e: React.FormEvent, prop: Proposal) => {
+    e.preventDefault();
+    const txt = (replyDraftMap[prop.id] || '').trim();
+    if (!txt || submittingReplyPropId) return;
+    setSubmittingReplyPropId(prop.id);
+    try {
+      await onAddProposalReply(profileUser.id, prop, txt);
+      setReplyDraftMap((prev) => ({ ...prev, [prop.id]: '' }));
+    } finally {
+      setSubmittingReplyPropId(null);
     }
   };
 
@@ -193,13 +290,14 @@ export default function ProfileAndClosetSection({
         </div>
       )}
 
-      {/* 1. 인스타 × KREAM 감성 무테두리 프로필 헤더 (게시물 수 · 팔로워 · 팔로잉 · 옷장) */}
+      {/* 1. 프로필 헤더 (프로필 사진 · 게시물 수 · 팔로워 · 팔로잉 · 옷장) */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 pb-8 border-b border-[#F1F1F3]">
         <div className="flex items-start sm:items-center gap-5">
-          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-zinc-950 text-white flex items-center justify-center text-xl sm:text-2xl font-black tracking-tight shrink-0 select-none">
-            {profileUser.handle.replace(/^@/, '').slice(0, 2).toUpperCase() ||
-              '87'}
-          </div>
+          <ProfileAvatar
+            avatarUrl={profileUser.avatarUrl}
+            handle={profileUser.handle}
+            sizeClass="w-16 h-16 sm:w-20 sm:h-20 text-xl sm:text-2xl"
+          />
 
           <div className="space-y-3 min-w-0">
             <div className="flex flex-wrap items-center gap-2.5">
@@ -212,8 +310,15 @@ export default function ProfileAndClosetSection({
                   <button
                     type="button"
                     onClick={() => {
+                      if (!isLoggedIn) {
+                        onOpenAuth();
+                        return;
+                      }
                       setHandleDraft(profileUser.handle);
                       setBioDraft(profileUser.bio);
+                      setAvatarDraftFile(null);
+                      setRemoveAvatarFlag(false);
+                      setAvatarDraftPreview(profileUser.avatarUrl || '');
                       setEditProfileOpen((v) => !v);
                     }}
                     className="px-3.5 py-1.5 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 text-xs font-bold text-zinc-800 transition cursor-pointer"
@@ -226,7 +331,7 @@ export default function ProfileAndClosetSection({
                       onClick={onOpenAuth}
                       className="px-3.5 py-1.5 rounded-full bg-zinc-950 text-white text-xs font-bold hover:bg-zinc-800 transition cursor-pointer"
                     >
-                      클라우드 로그인
+                      로그인
                     </button>
                   )}
                 </>
@@ -331,24 +436,64 @@ export default function ProfileAndClosetSection({
         )}
       </div>
 
-      {/* 내 프로필 인라인 편집 패널 */}
+      {/* 내 프로필 편집 패널 (프로필 사진 업로드 · 아이디 · 소개 수정) */}
       {mode === 'my' && editProfileOpen && (
         <form
           onSubmit={handleSaveProfileForm}
-          className="rounded-2xl bg-[#F7F7F8] p-5 space-y-4 max-w-xl"
+          className="rounded-3xl bg-[#F7F7F8] p-5 sm:p-6 space-y-5 max-w-xl animate-fade-soft"
         >
           <div className="flex items-center justify-between">
-            <p className="text-xs font-extrabold text-zinc-900">
-              프로필 아이디 및 소개 수정
+            <p className="text-sm font-extrabold text-zinc-950">
+              프로필 사진 및 정보 편집
             </p>
             <button
               type="button"
               onClick={() => setEditProfileOpen(false)}
-              className="text-xs text-zinc-400 hover:text-zinc-900 cursor-pointer"
+              className="text-xs font-semibold text-zinc-400 hover:text-zinc-900 cursor-pointer"
             >
               닫기
             </button>
           </div>
+
+          {/* 프로필 사진 선택 영역 */}
+          <div className="flex items-center gap-4">
+            <ProfileAvatar
+              avatarUrl={removeAvatarFlag ? '' : avatarDraftPreview}
+              handle={handleDraft || profileUser.handle}
+              sizeClass="w-16 h-16 text-lg"
+            />
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <label className="px-3.5 py-1.5 rounded-full bg-zinc-950 text-white text-xs font-bold hover:bg-zinc-800 inline-flex items-center gap-1.5 cursor-pointer">
+                  <Camera className="w-3.5 h-3.5" /> 프로필 사진 변경
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAvatarFileChange}
+                    className="hidden"
+                  />
+                </label>
+                {(avatarDraftPreview || profileUser.avatarUrl) &&
+                  !removeAvatarFlag && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAvatarDraftFile(null);
+                        setAvatarDraftPreview('');
+                        setRemoveAvatarFlag(true);
+                      }}
+                      className="px-3 py-1.5 rounded-full bg-white text-xs font-semibold text-zinc-500 hover:text-zinc-900 cursor-pointer"
+                    >
+                      기본 아이콘으로
+                    </button>
+                  )}
+              </div>
+              <p className="text-[11px] text-zinc-400">
+                정사각형 비율로 자동 크롭 및 WebP 경량화되어 저장됩니다.
+              </p>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-[11px] font-bold text-zinc-500 mb-1">
@@ -358,7 +503,7 @@ export default function ProfileAndClosetSection({
                 type="text"
                 value={handleDraft}
                 onChange={(e) => setHandleDraft(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl bg-white text-xs font-bold text-zinc-900 focus:outline-none"
+                className="w-full px-3.5 py-2.5 rounded-2xl bg-white text-xs font-bold text-zinc-900 focus:outline-none"
               />
             </div>
             <div>
@@ -369,17 +514,25 @@ export default function ProfileAndClosetSection({
                 type="text"
                 value={bioDraft}
                 onChange={(e) => setBioDraft(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl bg-white text-xs text-zinc-900 focus:outline-none"
+                className="w-full px-3.5 py-2.5 rounded-2xl bg-white text-xs text-zinc-900 focus:outline-none"
               />
             </div>
           </div>
-          <div className="flex justify-end">
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setEditProfileOpen(false)}
+              className="px-4 py-2 rounded-full bg-white text-xs font-bold text-zinc-600 cursor-pointer"
+            >
+              취소
+            </button>
             <button
               type="submit"
               disabled={isSavingProfile}
-              className="px-4 py-2 rounded-full bg-zinc-950 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+              className="px-5 py-2 rounded-full bg-zinc-950 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
             >
-              {isSavingProfile ? '저장 중...' : '프로필 저장'}
+              {isSavingProfile ? '저장 중...' : '변경사항 저장'}
             </button>
           </div>
         </form>
@@ -391,7 +544,10 @@ export default function ProfileAndClosetSection({
           <>
             {(
               [
-                { id: 'posts' as MyProfileSubTab, label: `게시물 ${userPosts.length}` },
+                {
+                  id: 'posts' as MyProfileSubTab,
+                  label: `게시물 ${userPosts.length}`,
+                },
                 {
                   id: 'closet' as MyProfileSubTab,
                   label: `옷장 ${profileUser.closet.length}`,
@@ -513,9 +669,15 @@ export default function ProfileAndClosetSection({
                     <span className="truncate text-zinc-700 font-medium">
                       {p.caption || '데일리 스타일'}
                     </span>
-                    <span className="shrink-0 inline-flex items-center gap-1">
-                      <Heart className="w-3 h-3" /> {p.likeUserIds.length}
-                    </span>
+                    <div className="shrink-0 flex items-center gap-2.5">
+                      <span className="inline-flex items-center gap-1">
+                        <Heart className="w-3 h-3" /> {p.likeUserIds.length}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <MessageCircle className="w-3 h-3" />{' '}
+                        {p.comments.length}
+                      </span>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -524,10 +686,9 @@ export default function ProfileAndClosetSection({
         </div>
       )}
 
-      {/* 3B. 옷장 서브 뷰 (마이페이지 내 옷장 OR 타 사용자 옷장에서 코디 제안하기!) */}
+      {/* 3B. 옷장 서브 뷰 */}
       {activeClosetView && (
         <div className="space-y-6">
-          {/* 타 사용자 프로필일 때: 프로필 내 옷장에서 직접 코디 조합 제안하기 트레이 */}
           {mode === 'other' && (
             <form
               onSubmit={handleSendProposalForm}
@@ -602,7 +763,6 @@ export default function ProfileAndClosetSection({
             </form>
           )}
 
-          {/* 카테고리 필터 칩 */}
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
               {CLOSET_FILTERS.map((cat) => {
@@ -631,7 +791,6 @@ export default function ProfileAndClosetSection({
             )}
           </div>
 
-          {/* KREAM 상품 카드 스타일 무테두리 옷장 그리드 */}
           {filteredCloset.length === 0 ? (
             <div className="py-16 text-center space-y-3">
               <p className="text-sm font-semibold text-zinc-400">
@@ -766,7 +925,7 @@ export default function ProfileAndClosetSection({
         </div>
       )}
 
-      {/* 3C. 저장된 룩북 서브 뷰 (마이페이지) */}
+      {/* 3C. 저장된 룩북 서브 뷰 */}
       {activeSavedView && (
         <div>
           {savedLooks.length === 0 ? (
@@ -830,7 +989,7 @@ export default function ProfileAndClosetSection({
         </div>
       )}
 
-      {/* 3D. 받은 코디 제안 서브 뷰 */}
+      {/* 3D. 받은 코디 제안 서브 뷰 (1인 1회 하트 토글 + 간단 코멘트 답글 기능!) */}
       {activeProposalsView && (
         <div>
           {profileUser.proposals.length === 0 ? (
@@ -846,70 +1005,182 @@ export default function ProfileAndClosetSection({
                     : profileUser.closet.filter((c) =>
                         prop.itemIds.includes(c.id)
                       );
+                const isLikedByMe = Boolean(
+                  myUserId && prop.likedUserIds.includes(myUserId)
+                );
+                const propAvatar =
+                  prop.proposerAvatar ||
+                  (prop.proposerUserId
+                    ? avatarByUserId.get(prop.proposerUserId)
+                    : undefined);
+
                 return (
                   <div
                     key={prop.id}
-                    className="rounded-3xl bg-[#F7F7F8] p-5 space-y-4"
+                    className="rounded-3xl bg-[#F7F7F8] p-5 space-y-4 flex flex-col justify-between"
                   >
-                    <div className="flex items-center justify-between">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (prop.proposerUserId) {
-                            onVisitUserProfile(
-                              prop.proposerUserId,
-                              prop.proposer
-                            );
-                          }
-                        }}
-                        className="text-xs font-extrabold text-zinc-950 hover:underline cursor-pointer"
-                      >
-                        {prop.proposer} 님의 코디 제안
-                      </button>
-                      <span className="text-[11px] text-zinc-400">
-                        {prop.createdAt}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-4 gap-2">
-                      {snapItems.map((it) => (
-                        <div key={it.id} className="space-y-1">
-                          <img
-                            referrerPolicy="no-referrer"
-                            src={it.image}
-                            alt={it.name}
-                            className="aspect-square rounded-xl object-cover bg-white"
-                          />
-                          <p className="text-[10px] font-semibold text-zinc-700 truncate">
-                            {it.name}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-
-                    <p className="text-xs text-zinc-600 leading-relaxed">
-                      {prop.note}
-                    </p>
-
-                    <div className="flex items-center justify-between pt-1">
-                      <button
-                        type="button"
-                        onClick={() => onLikeProposal(profileUser.id, prop)}
-                        className="px-3 py-1.5 rounded-full bg-white text-xs font-bold text-zinc-800 inline-flex items-center gap-1 cursor-pointer"
-                      >
-                        <Heart className="w-3.5 h-3.5" /> 공감 {prop.likes}
-                      </button>
-
-                      {mode === 'my' && (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
                         <button
                           type="button"
-                          onClick={() => onAdoptProposalToSaved(prop)}
-                          className="px-3.5 py-1.5 rounded-full bg-zinc-950 text-white text-xs font-bold cursor-pointer"
+                          onClick={() => {
+                            if (prop.proposerUserId) {
+                              onVisitUserProfile(
+                                prop.proposerUserId,
+                                prop.proposer
+                              );
+                            }
+                          }}
+                          className="inline-flex items-center gap-2 text-xs font-extrabold text-zinc-950 hover:opacity-75 cursor-pointer"
                         >
-                          내 룩북에 저장
+                          <ProfileAvatar
+                            avatarUrl={propAvatar}
+                            handle={prop.proposer}
+                            sizeClass="w-6 h-6 text-[10px]"
+                          />
+                          <span>{prop.proposer} 님의 코디 제안</span>
                         </button>
+                        <span className="text-[11px] text-zinc-400">
+                          {prop.createdAt}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-4 gap-2">
+                        {snapItems.map((it) => (
+                          <div key={it.id} className="space-y-1">
+                            <img
+                              referrerPolicy="no-referrer"
+                              src={it.image}
+                              alt={it.name}
+                              className="aspect-square rounded-xl object-cover bg-white"
+                            />
+                            <p className="text-[10px] font-semibold text-zinc-700 truncate">
+                              {it.name}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <p className="text-xs text-zinc-700 leading-relaxed">
+                        {prop.note}
+                      </p>
+
+                      <div className="flex items-center justify-between pt-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onToggleLikeProposal(profileUser.id, prop)
+                          }
+                          className={`px-3.5 py-1.5 rounded-full bg-white text-xs font-bold inline-flex items-center gap-1.5 transition cursor-pointer ${
+                            isLikedByMe
+                              ? 'text-rose-500'
+                              : 'text-zinc-700 hover:text-zinc-950'
+                          }`}
+                        >
+                          <Heart
+                            className="w-3.5 h-3.5"
+                            fill={isLikedByMe ? 'currentColor' : 'none'}
+                          />
+                          <span className="tabular-nums">
+                            공감 {prop.likes}
+                          </span>
+                        </button>
+
+                        {mode === 'my' && (
+                          <button
+                            type="button"
+                            onClick={() => onAdoptProposalToSaved(prop)}
+                            className="px-3.5 py-1.5 rounded-full bg-zinc-950 text-white text-xs font-bold cursor-pointer"
+                          >
+                            내 룩북에 저장
+                          </button>
+                        )}
+                      </div>
+
+                      {/* 코디 제안 답글 목록 */}
+                      {prop.replies.length > 0 && (
+                        <div className="rounded-2xl bg-white p-3.5 space-y-2.5">
+                          {prop.replies.map((rep) => {
+                            const repAv =
+                              rep.authorAvatar ||
+                              avatarByUserId.get(rep.userId);
+                            const isMine = Boolean(
+                              myUserId && rep.userId === myUserId
+                            );
+                            return (
+                              <div
+                                key={rep.id}
+                                className="flex items-start justify-between gap-2 text-xs"
+                              >
+                                <div className="flex items-start gap-2 min-w-0">
+                                  <ProfileAvatar
+                                    avatarUrl={repAv}
+                                    handle={rep.authorHandle}
+                                    sizeClass="w-5 h-5 text-[9px]"
+                                  />
+                                  <div className="min-w-0">
+                                    <span className="font-extrabold text-zinc-900 mr-1.5">
+                                      {rep.authorHandle}
+                                    </span>
+                                    <span className="text-zinc-700 break-words">
+                                      {rep.body}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {isMine && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onDeleteProposalReply(
+                                        profileUser.id,
+                                        prop,
+                                        rep
+                                      )
+                                    }
+                                    className="text-[10px] text-zinc-400 hover:text-zinc-900 shrink-0 cursor-pointer"
+                                  >
+                                    삭제
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
+
+                    {/* 코디 제안 간단 답글 입력창 */}
+                    <form
+                      onSubmit={(e) => handleReplySubmit(e, prop)}
+                      className="flex items-center gap-2 pt-2 border-t border-zinc-200/60"
+                    >
+                      <input
+                        type="text"
+                        value={replyDraftMap[prop.id] || ''}
+                        onChange={(e) =>
+                          setReplyDraftMap((prev) => ({
+                            ...prev,
+                            [prop.id]: e.target.value,
+                          }))
+                        }
+                        placeholder="코디 제안에 답글 남기기..."
+                        onFocus={() => {
+                          if (!myUserId) onOpenAuth();
+                        }}
+                        className="flex-1 px-3.5 py-2 rounded-full bg-white text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none"
+                      />
+                      <button
+                        type="submit"
+                        disabled={
+                          !(replyDraftMap[prop.id] || '').trim() ||
+                          submittingReplyPropId === prop.id
+                        }
+                        className="w-8 h-8 rounded-full bg-zinc-950 text-white flex items-center justify-center disabled:opacity-30 cursor-pointer shrink-0"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                      </button>
+                    </form>
                   </div>
                 );
               })}
@@ -918,15 +1189,15 @@ export default function ProfileAndClosetSection({
         </div>
       )}
 
-      {/* 팔로워 / 팔로잉 유저 목록 모달 */}
+      {/* 팔로워 / 팔로잉 유저 목록 모달 — 검은색 배경 없이 깨끗한 무색 투명 블러 적용! */}
       {followModalType && (
         <div
           onClick={() => setFollowModalType(null)}
-          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-transparent backdrop-blur-md flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl space-y-4 animate-fade-soft"
+            className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-[0_20px_60px_rgba(0,0,0,0.12)] ring-1 ring-black/5 space-y-4 animate-fade-soft"
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-extrabold text-zinc-950">
@@ -935,7 +1206,7 @@ export default function ProfileAndClosetSection({
               <button
                 type="button"
                 onClick={() => setFollowModalType(null)}
-                className="w-8 h-8 rounded-full bg-[#F4F4F5] flex items-center justify-center cursor-pointer"
+                className="w-8 h-8 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -966,16 +1237,17 @@ export default function ProfileAndClosetSection({
                     className="w-full p-2.5 rounded-2xl hover:bg-[#F7F7F8] flex items-center justify-between transition cursor-pointer"
                   >
                     <div className="flex items-center gap-2.5">
-                      <span className="w-8 h-8 rounded-full bg-zinc-950 text-white text-xs font-bold flex items-center justify-center">
-                        {u.handle.replace(/^@/, '').slice(0, 1).toUpperCase() ||
-                          'U'}
-                      </span>
+                      <ProfileAvatar
+                        avatarUrl={u.avatarUrl || avatarByUserId.get(u.id)}
+                        handle={u.handle}
+                        sizeClass="w-8 h-8 text-xs"
+                      />
                       <span className="text-xs font-bold text-zinc-900">
                         {u.handle}
                       </span>
                     </div>
                     <span className="text-[11px] text-zinc-400">
-                      옷장 보기 →
+                      프로필 보기 →
                     </span>
                   </button>
                 ))}

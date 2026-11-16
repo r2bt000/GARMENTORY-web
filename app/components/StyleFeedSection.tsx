@@ -1,9 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Camera,
-  Copy,
   ExternalLink,
   Heart,
   MessageCircle,
@@ -17,6 +16,7 @@ import {
   type ClothItem,
   type CommunityUser,
   STYLE_HASH_PRESETS,
+  type StyleComment,
   type StylePost,
 } from '../lib/socialConstants';
 
@@ -24,17 +24,18 @@ interface StyleFeedProps {
   posts: StylePost[];
   myUserId: string | null;
   myHandle: string;
+  myAvatarUrl: string;
   myWardrobe: ClothItem[];
   followingIds: string[];
   communityUsers: CommunityUser[];
-  needsSocialSql: boolean;
-  onCopySocialSql: () => void;
+  avatarByUserId: Map<string, string>;
   onOpenAuth: () => void;
   onOpenClothUpload: () => void;
   onVisitUserProfile: (userId: string, handleHint?: string) => void;
   onToggleFollow: (targetUserId: string) => void;
   onToggleLikePost: (post: StylePost) => void;
   onSubmitComment: (post: StylePost, commentBody: string) => Promise<void>;
+  onDeleteComment: (post: StylePost, comment: StyleComment) => Promise<void>;
   onDeletePost: (post: StylePost) => Promise<void>;
   onCreateStylePost: (draft: {
     file: File;
@@ -44,6 +45,36 @@ interface StyleFeedProps {
   }) => Promise<boolean>;
 }
 
+function AvatarBadge({
+  avatarUrl,
+  handle,
+  sizeClass = 'w-6 h-6 text-[10px]',
+}: {
+  avatarUrl?: string;
+  handle: string;
+  sizeClass?: string;
+}) {
+  if (avatarUrl) {
+    return (
+      <img
+        referrerPolicy="no-referrer"
+        src={avatarUrl}
+        alt={handle}
+        className={`${sizeClass} rounded-full object-cover bg-[#F4F4F5] shrink-0`}
+      />
+    );
+  }
+  const initial =
+    handle.replace(/^@/, '').slice(0, 1).toUpperCase() || 'U';
+  return (
+    <span
+      className={`${sizeClass} rounded-full bg-zinc-900 text-white font-bold flex items-center justify-center shrink-0 select-none`}
+    >
+      {initial}
+    </span>
+  );
+}
+
 export default function StyleFeedSection({
   posts,
   myUserId,
@@ -51,14 +82,14 @@ export default function StyleFeedSection({
   myWardrobe,
   followingIds,
   communityUsers,
-  needsSocialSql,
-  onCopySocialSql,
+  avatarByUserId,
   onOpenAuth,
   onOpenClothUpload,
   onVisitUserProfile,
   onToggleFollow,
   onToggleLikePost,
   onSubmitComment,
+  onDeleteComment,
   onDeletePost,
   onCreateStylePost,
 }: StyleFeedProps) {
@@ -68,8 +99,15 @@ export default function StyleFeedSection({
   const [commentInput, setCommentInput] = useState<string>('');
   const [isSubmittingComment, setIsSubmittingComment] =
     useState<boolean>(false);
+  const commentInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 새 STYLE 게시물 작성 모달 상태 (모델샷 제외, 실제 착샷 업로드 + 내 옷장 아이템 태그)
+  // 인라인 카드 빠른 댓글 입력 상태
+  const [inlineCommentPostId, setInlineCommentPostId] = useState<number | null>(
+    null
+  );
+  const [inlineCommentText, setInlineCommentText] = useState<string>('');
+
+  // 새 STYLE 게시물 작성 모달 상태
   const [uploadOpen, setUploadOpen] = useState<boolean>(false);
   const [postFile, setPostFile] = useState<File | null>(null);
   const [postPreviewUrl, setPostPreviewUrl] = useState<string>('');
@@ -79,23 +117,30 @@ export default function StyleFeedSection({
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
 
   const activePost = posts.find((p) => p.id === activePostId) || null;
-
   const cleanQuery = userQuery.trim().toLowerCase();
 
-  const matchedUsers = communityUsers.filter((u) => {
-    if (u.id === 'me') return false;
-    if (!cleanQuery) return true;
-    return (
-      u.handle.toLowerCase().includes(cleanQuery) ||
-      u.bio.toLowerCase().includes(cleanQuery)
-    );
-  });
+  // 유저 목록은 평소에 노출하지 않고, 직접 아이디를 검색했을 때만 표시!
+  const searchedUsers =
+    cleanQuery.length > 0
+      ? communityUsers.filter((u) => {
+          if (u.id === 'me') return false;
+          const normHandle = u.handle.toLowerCase();
+          const withoutAt = normHandle.replace(/^@/, '');
+          const qWithoutAt = cleanQuery.replace(/^@/, '');
+          return (
+            normHandle.includes(cleanQuery) ||
+            (qWithoutAt.length > 0 && withoutAt.includes(qWithoutAt))
+          );
+        })
+      : [];
 
+  // 게시물은 KREAM처럼 모르는 사람(비로그인·미팔로우 포함)의 게시물도 '전체' 탭에서 모두 공개 열람!
   const filteredPosts = posts.filter((p) => {
     if (selectedTag === '팔로잉') {
       if (!myUserId) return false;
-      if (!followingIds.includes(p.userId) && p.userId !== myUserId)
+      if (!followingIds.includes(p.userId) && p.userId !== myUserId) {
         return false;
+      }
     } else if (selectedTag !== '전체') {
       if (!p.styleTags.includes(selectedTag)) return false;
     }
@@ -172,29 +217,61 @@ export default function StyleFeedSection({
     }
   };
 
+  const handleInlineCommentSubmit = async (
+    e: React.FormEvent,
+    post: StylePost
+  ) => {
+    e.preventDefault();
+    if (!inlineCommentText.trim() || isSubmittingComment) return;
+    setIsSubmittingComment(true);
+    try {
+      await onSubmitComment(post, inlineCommentText.trim());
+      setInlineCommentText('');
+      setInlineCommentPostId(null);
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  };
+
+  const openPostAndFocusComment = (postId: number) => {
+    setActivePostId(postId);
+    setTimeout(() => {
+      commentInputRef.current?.focus();
+    }, 120);
+  };
+
   return (
     <section className="space-y-8 animate-fade-soft">
-      {/* 상단 헤더 & 유저 검색 & + 스타일 올리기 */}
+      {/* 상단 헤더 & 유저 아이디 검색 & + 스타일 올리기 */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-extrabold tracking-tight text-zinc-950">
             STYLE
           </h2>
           <p className="text-xs text-zinc-400 mt-0.5">
-            데일리 착샷과 착용한 옷장 아이템을 공유하고, 아이디를 눌러 서로의 옷장을 구경해 보세요.
+            모두의 데일리 착샷과 착용 아이템을 구경하고, 유저 아이디를 검색해 팔로우하거나 옷장을 방문해 보세요.
           </p>
         </div>
 
         <div className="flex items-center gap-2.5">
-          <div className="relative flex-1 sm:w-64">
+          <div className="relative flex-1 sm:w-68">
             <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={userQuery}
               onChange={(e) => setUserQuery(e.target.value)}
-              placeholder="@유저 아이디 · 아이템 · 태그 검색"
-              className="w-full pl-9 pr-4 py-2.5 rounded-full bg-[#F4F4F5] text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+              placeholder="@유저 아이디 검색 (팔로우 · 옷장 방문)"
+              className="w-full pl-9 pr-8 py-2.5 rounded-full bg-[#F4F4F5] text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
             />
+            {userQuery && (
+              <button
+                type="button"
+                onClick={() => setUserQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-900 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
           <button
@@ -213,48 +290,64 @@ export default function StyleFeedSection({
         </div>
       </div>
 
-      {/* 소셜 테이블 최초 1회 안내 배너 (테이블 미생성 시에만 노출) */}
-      {needsSocialSql && (
-        <div className="rounded-2xl bg-[#F7F7F8] px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-600">
-          <span>
-            모든 유저 간 실시간 STYLE 피드·좋아요·팔로우 동기화를 위해 Supabase SQL Editor에 소셜 테이블 SQL을 1회 실행해 주세요.
-          </span>
-          <button
-            type="button"
-            onClick={onCopySocialSql}
-            className="px-3.5 py-1.5 rounded-full bg-zinc-950 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
-          >
-            <Copy className="w-3 h-3" /> 소셜 SQL 복사
-          </button>
-        </div>
-      )}
-
-      {/* 탐색 가능한 873oc 멤버 스트립 (클릭 시 타 유저 프로필 → 옷장 코디 제안 이동!) */}
-      {matchedUsers.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-            {cleanQuery ? '검색된 사용자 프로필' : '873oc 오픈 옷장 멤버'}
-          </p>
-          <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar pb-1">
-            {matchedUsers.slice(0, 16).map((u) => (
-              <button
-                key={u.id}
-                type="button"
-                onClick={() => onVisitUserProfile(u.id, u.handle)}
-                className="px-3.5 py-2 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 transition inline-flex items-center gap-2 shrink-0 cursor-pointer"
-              >
-                <span className="w-6 h-6 rounded-full bg-zinc-900 text-white text-[10px] font-bold flex items-center justify-center">
-                  {u.handle.replace(/^@/, '').slice(0, 1).toUpperCase() || 'U'}
-                </span>
-                <span className="text-xs font-bold text-zinc-900">
-                  {u.handle}
-                </span>
-                <span className="text-[11px] text-zinc-400">
-                  옷장 {u.closet.length}
-                </span>
-              </button>
-            ))}
+      {/* 직접 유저 아이디를 검색했을 때만 나타나는 유저 검색 결과 패널 */}
+      {cleanQuery.length > 0 && (
+        <div className="rounded-2xl bg-[#F7F7F8] p-4 space-y-3 animate-fade-soft">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-extrabold text-zinc-900">
+              사용자 검색 결과 ({searchedUsers.length})
+            </p>
           </div>
+          {searchedUsers.length === 0 ? (
+            <p className="text-xs text-zinc-400 py-1">
+              &apos;{userQuery}&apos; 아이디와 일치하는 사용자가 없습니다.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+              {searchedUsers.slice(0, 12).map((u) => {
+                const isFollowing = followingIds.includes(u.id);
+                const av = u.avatarUrl || avatarByUserId.get(u.id);
+                return (
+                  <div
+                    key={u.id}
+                    className="rounded-2xl bg-white p-3 flex items-center justify-between gap-2.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onVisitUserProfile(u.id, u.handle)}
+                      className="flex items-center gap-2.5 min-w-0 text-left hover:opacity-75 transition cursor-pointer"
+                    >
+                      <AvatarBadge
+                        avatarUrl={av}
+                        handle={u.handle}
+                        sizeClass="w-9 h-9 text-xs"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-extrabold text-zinc-950 truncate">
+                          {u.handle}
+                        </p>
+                        <p className="text-[11px] text-zinc-400">
+                          옷장 {u.closet.length}벌 보러가기
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onToggleFollow(u.id)}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-bold shrink-0 transition cursor-pointer ${
+                        isFollowing
+                          ? 'bg-[#F4F4F5] text-zinc-800 hover:bg-zinc-200'
+                          : 'bg-zinc-950 text-white hover:bg-zinc-800'
+                      }`}
+                    >
+                      {isFollowing ? '팔로잉' : '팔로우'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -279,35 +372,44 @@ export default function StyleFeedSection({
         })}
       </div>
 
-      {/* STYLE 4열 무테두리 피드 그리드 */}
+      {/* KREAM STYLE 4열 무테두리 오픈 피드 그리드 (누구나 전체 열람 가능!) */}
       {filteredPosts.length === 0 ? (
         <div className="py-20 text-center space-y-3">
           <p className="text-sm font-semibold text-zinc-500">
             {selectedTag === '팔로잉'
-              ? '팔로우한 사용자의 게시물이 아직 없습니다.'
+              ? '아직 팔로우한 사용자의 게시물이 없습니다. 상단 검색창에서 아이디를 검색해 팔로우해 보세요!'
               : '아직 등록된 스타일 게시물이 없습니다. 첫 번째 데일리 착샷을 올려보세요!'}
           </p>
-          <button
-            type="button"
-            onClick={() => {
-              if (!myUserId) {
-                onOpenAuth();
-                return;
-              }
-              setUploadOpen(true);
-            }}
-            className="px-5 py-2.5 rounded-full bg-zinc-950 text-white text-xs font-bold hover:bg-zinc-800 transition cursor-pointer"
-          >
-            + 첫 스타일 게시물 올리기
-          </button>
+          {selectedTag !== '팔로잉' && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!myUserId) {
+                  onOpenAuth();
+                  return;
+                }
+                setUploadOpen(true);
+              }}
+              className="px-5 py-2.5 rounded-full bg-zinc-950 text-white text-xs font-bold hover:bg-zinc-800 transition cursor-pointer"
+            >
+              + 첫 스타일 게시물 올리기
+            </button>
+          )}
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-9">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-10">
           {filteredPosts.map((post) => {
             const liked = Boolean(
               myUserId && post.likeUserIds.includes(myUserId)
             );
             const firstTagItem = post.taggedItems[0];
+            const authorAvatar =
+              post.authorAvatar || avatarByUserId.get(post.userId);
+            const lastComment =
+              post.comments.length > 0
+                ? post.comments[post.comments.length - 1]
+                : null;
+
             return (
               <div key={post.id} className="space-y-2.5 group">
                 <div
@@ -328,7 +430,7 @@ export default function StyleFeedSection({
                   )}
                 </div>
 
-                {/* 작성자 프로필 클릭 시 타 사용자 프로필(또는 마이페이지)로 즉시 이동 */}
+                {/* 작성자 프로필 + 하트 토글 + 댓글 버튼 (항상 표시) */}
                 <div className="flex items-center justify-between gap-2 px-0.5">
                   <button
                     type="button"
@@ -337,43 +439,56 @@ export default function StyleFeedSection({
                     }
                     className="flex items-center gap-1.5 min-w-0 hover:opacity-70 transition cursor-pointer"
                   >
-                    <span className="w-5 h-5 rounded-full bg-zinc-900 text-white text-[9px] font-bold flex items-center justify-center shrink-0">
-                      {post.authorHandle
-                        .replace(/^@/, '')
-                        .slice(0, 1)
-                        .toUpperCase() || 'U'}
-                    </span>
+                    <AvatarBadge
+                      avatarUrl={authorAvatar}
+                      handle={post.authorHandle}
+                      sizeClass="w-5 h-5 text-[9px]"
+                    />
                     <span className="text-xs font-bold text-zinc-900 truncate">
                       {post.authorHandle}
                     </span>
                   </button>
 
-                  <div className="flex items-center gap-2.5 shrink-0 text-xs text-zinc-400">
+                  <div className="flex items-center gap-3 shrink-0 text-xs">
                     <button
                       type="button"
                       onClick={() => onToggleLikePost(post)}
+                      aria-label="좋아요 토글"
                       className={`inline-flex items-center gap-1 transition cursor-pointer ${
                         liked
-                          ? 'text-zinc-950 font-bold'
-                          : 'hover:text-zinc-800'
+                          ? 'text-rose-500 font-bold'
+                          : 'text-zinc-400 hover:text-zinc-800'
                       }`}
                     >
                       <Heart
                         className="w-3.5 h-3.5"
                         fill={liked ? 'currentColor' : 'none'}
                       />
-                      <span>{post.likeUserIds.length}</span>
+                      <span className="tabular-nums">
+                        {post.likeUserIds.length}
+                      </span>
                     </button>
-                    {post.comments.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setActivePostId(post.id)}
-                        className="inline-flex items-center gap-1 hover:text-zinc-800 cursor-pointer"
-                      >
-                        <MessageCircle className="w-3.5 h-3.5" />
-                        <span>{post.comments.length}</span>
-                      </button>
-                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!myUserId) {
+                          openPostAndFocusComment(post.id);
+                          return;
+                        }
+                        setInlineCommentPostId((prev) =>
+                          prev === post.id ? null : post.id
+                        );
+                        setInlineCommentText('');
+                      }}
+                      aria-label="댓글 달기"
+                      className="inline-flex items-center gap-1 text-zinc-400 hover:text-zinc-900 transition cursor-pointer"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5" />
+                      <span className="tabular-nums">
+                        {post.comments.length}
+                      </span>
+                    </button>
                   </div>
                 </div>
 
@@ -386,7 +501,43 @@ export default function StyleFeedSection({
                   </p>
                 )}
 
-                {/* KREAM STYLE 착용 아이템 미니 태그 카드 (테두리 없음) */}
+                {/* 최신 댓글 미리보기 & 인라인 빠른 댓글창 */}
+                {lastComment && (
+                  <div
+                    onClick={() => openPostAndFocusComment(post.id)}
+                    className="px-0.5 text-[11px] text-zinc-500 truncate cursor-pointer"
+                  >
+                    <strong className="font-bold text-zinc-800 mr-1">
+                      {lastComment.authorHandle}
+                    </strong>
+                    <span>{lastComment.body}</span>
+                  </div>
+                )}
+
+                {inlineCommentPostId === post.id && (
+                  <form
+                    onSubmit={(e) => handleInlineCommentSubmit(e, post)}
+                    className="flex items-center gap-1.5 pt-0.5"
+                  >
+                    <input
+                      type="text"
+                      value={inlineCommentText}
+                      onChange={(e) => setInlineCommentText(e.target.value)}
+                      placeholder="댓글 입력..."
+                      autoFocus
+                      className="flex-1 px-3 py-1.5 rounded-full bg-[#F4F4F5] text-[11px] text-zinc-900 focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!inlineCommentText.trim() || isSubmittingComment}
+                      className="w-7 h-7 rounded-full bg-zinc-950 text-white flex items-center justify-center disabled:opacity-30 cursor-pointer shrink-0"
+                    >
+                      <Send className="w-3 h-3" />
+                    </button>
+                  </form>
+                )}
+
+                {/* 착용 아이템 태그 카드 */}
                 {firstTagItem && (
                   <div
                     onClick={() => setActivePostId(post.id)}
@@ -417,15 +568,15 @@ export default function StyleFeedSection({
         </div>
       )}
 
-      {/* 새 STYLE 게시물 작성 모달 (실제 사진 업로드 + 내 옷장 아이템 태그) */}
+      {/* 새 STYLE 게시물 작성 모달 (무색 블러 배경 적용) */}
       {uploadOpen && (
         <div
           onClick={() => setUploadOpen(false)}
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-7 shadow-2xl space-y-5 animate-fade-soft"
+            className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-7 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-5 animate-fade-soft"
           >
             <div className="flex items-center justify-between">
               <div>
@@ -446,7 +597,6 @@ export default function StyleFeedSection({
             </div>
 
             <form onSubmit={handlePublishSubmit} className="space-y-5">
-              {/* 1. 실제 착샷 사진 선택 */}
               <div>
                 {postPreviewUrl ? (
                   <div className="relative aspect-[4/5] max-h-72 mx-auto rounded-2xl overflow-hidden bg-[#F4F4F5]">
@@ -473,7 +623,7 @@ export default function StyleFeedSection({
                       착샷 · 데일리 사진 선택하기
                     </span>
                     <span className="text-[11px] text-zinc-400 mt-1">
-                      클라우드 업로드 시 고화질 WebP로 자동 경량화됩니다
+                      누구나 STYLE 탭에서 볼 수 있도록 게시됩니다
                     </span>
                     <input
                       type="file"
@@ -486,7 +636,6 @@ export default function StyleFeedSection({
                 )}
               </div>
 
-              {/* 2. 캡션 & 스타일 해시태그 */}
               <div className="space-y-2.5">
                 <textarea
                   rows={3}
@@ -517,7 +666,6 @@ export default function StyleFeedSection({
                 </div>
               </div>
 
-              {/* 3. KREAM STYLE 방식: 착용한 내 옷장 아이템 태그 */}
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-zinc-900">
@@ -593,15 +741,15 @@ export default function StyleFeedSection({
         </div>
       )}
 
-      {/* STYLE 게시물 상세 모달 (착용 옷장 태그 + 작성자 프로필 이동 + 댓글) */}
+      {/* STYLE 게시물 상세 모달 (좋아요 토글 · 실시간 댓글 작성/삭제 · 착용 태그 · 무색 블러 배경) */}
       {activePost && (
         <div
           onClick={() => setActivePostId(null)}
-          className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-3xl bg-white shadow-2xl grid grid-cols-1 md:grid-cols-12 overflow-hidden animate-fade-soft"
+            className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-3xl bg-white shadow-[0_24px_70px_rgba(0,0,0,0.16)] ring-1 ring-black/5 grid grid-cols-1 md:grid-cols-12 overflow-hidden animate-fade-soft"
           >
             <div className="md:col-span-7 bg-[#F4F4F5] flex items-center justify-center max-h-[75vh]">
               <img
@@ -624,14 +772,16 @@ export default function StyleFeedSection({
                         activePost.authorHandle
                       );
                     }}
-                    className="flex items-center gap-2 hover:opacity-75 transition cursor-pointer"
+                    className="flex items-center gap-2.5 hover:opacity-75 transition cursor-pointer"
                   >
-                    <span className="w-8 h-8 rounded-full bg-zinc-950 text-white text-xs font-bold flex items-center justify-center">
-                      {activePost.authorHandle
-                        .replace(/^@/, '')
-                        .slice(0, 1)
-                        .toUpperCase() || 'U'}
-                    </span>
+                    <AvatarBadge
+                      avatarUrl={
+                        activePost.authorAvatar ||
+                        avatarByUserId.get(activePost.userId)
+                      }
+                      handle={activePost.authorHandle}
+                      sizeClass="w-9 h-9 text-xs"
+                    />
                     <div className="text-left">
                       <p className="text-xs font-extrabold text-zinc-950">
                         {activePost.authorHandle}
@@ -759,55 +909,113 @@ export default function StyleFeedSection({
                   </div>
                 )}
 
-                {/* 댓글 목록 */}
-                <div className="space-y-2.5 pt-2 border-t border-[#F1F1F3]">
-                  <p className="text-[11px] font-bold text-zinc-400">
+                {/* 댓글 목록 (아바타 · 시간 · 본인 댓글 삭제 지원) */}
+                <div className="space-y-3 pt-3 border-t border-[#F1F1F3]">
+                  <p className="text-xs font-extrabold text-zinc-900">
                     댓글 {activePost.comments.length}
                   </p>
                   {activePost.comments.length === 0 ? (
                     <p className="text-xs text-zinc-400 py-2">
-                      첫 댓글을 남겨보세요.
+                      첫 번째 댓글을 남겨보세요.
                     </p>
                   ) : (
-                    <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                      {activePost.comments.map((cm) => (
-                        <div key={cm.id} className="text-xs leading-relaxed">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActivePostId(null);
-                              onVisitUserProfile(cm.userId, cm.authorHandle);
-                            }}
-                            className="font-extrabold text-zinc-900 mr-1.5 hover:underline cursor-pointer"
+                    <div className="space-y-3 max-h-48 overflow-y-auto pr-1">
+                      {activePost.comments.map((cm) => {
+                        const cmAvatar =
+                          cm.authorAvatar || avatarByUserId.get(cm.userId);
+                        const isMyComment = Boolean(
+                          myUserId && cm.userId === myUserId
+                        );
+                        return (
+                          <div
+                            key={cm.id}
+                            className="flex items-start justify-between gap-2 text-xs"
                           >
-                            {cm.authorHandle}
-                          </button>
-                          <span className="text-zinc-700">{cm.body}</span>
-                        </div>
-                      ))}
+                            <div className="flex items-start gap-2 min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActivePostId(null);
+                                  onVisitUserProfile(
+                                    cm.userId,
+                                    cm.authorHandle
+                                  );
+                                }}
+                                className="shrink-0 mt-0.5 cursor-pointer"
+                              >
+                                <AvatarBadge
+                                  avatarUrl={cmAvatar}
+                                  handle={cm.authorHandle}
+                                  sizeClass="w-6 h-6 text-[10px]"
+                                />
+                              </button>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActivePostId(null);
+                                      onVisitUserProfile(
+                                        cm.userId,
+                                        cm.authorHandle
+                                      );
+                                    }}
+                                    className="font-extrabold text-zinc-900 hover:underline cursor-pointer"
+                                  >
+                                    {cm.authorHandle}
+                                  </button>
+                                  <span className="text-[10px] text-zinc-400">
+                                    {cm.createdAt}
+                                  </span>
+                                </div>
+                                <p className="text-zinc-700 leading-relaxed break-words mt-0.5">
+                                  {cm.body}
+                                </p>
+                              </div>
+                            </div>
+
+                            {isMyComment && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteComment(activePost, cm)}
+                                title="댓글 삭제"
+                                className="text-[10px] text-zinc-400 hover:text-zinc-900 shrink-0 cursor-pointer"
+                              >
+                                삭제
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* 하단 좋아요 + 댓글 입력 */}
+              {/* 하단 하트 토글 + 댓글 입력 */}
               <div className="pt-3 border-t border-[#F1F1F3] space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => onToggleLikePost(activePost)}
-                    className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-900 cursor-pointer"
-                  >
-                    <Heart
-                      className="w-4 h-4"
-                      fill={
-                        myUserId && activePost.likeUserIds.includes(myUserId)
-                          ? 'currentColor'
-                          : 'none'
-                      }
-                    />
-                    <span>좋아요 {activePost.likeUserIds.length}</span>
-                  </button>
+                  {(() => {
+                    const isLiked = Boolean(
+                      myUserId && activePost.likeUserIds.includes(myUserId)
+                    );
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => onToggleLikePost(activePost)}
+                        className={`inline-flex items-center gap-1.5 text-xs font-bold transition cursor-pointer ${
+                          isLiked ? 'text-rose-500' : 'text-zinc-900'
+                        }`}
+                      >
+                        <Heart
+                          className="w-4 h-4"
+                          fill={isLiked ? 'currentColor' : 'none'}
+                        />
+                        <span>좋아요 {activePost.likeUserIds.length}</span>
+                      </button>
+                    );
+                  })()}
+
                   <button
                     type="button"
                     onClick={() => {
@@ -819,7 +1027,7 @@ export default function StyleFeedSection({
                     }}
                     className="text-[11px] font-bold text-zinc-600 hover:text-zinc-950 cursor-pointer"
                   >
-                    이 유저 옷장으로 코디 제안하기 →
+                    작성자 옷장 구경하기 →
                   </button>
                 </div>
 
@@ -828,16 +1036,24 @@ export default function StyleFeedSection({
                   className="flex items-center gap-2"
                 >
                   <input
+                    ref={commentInputRef}
                     type="text"
                     value={commentInput}
                     onChange={(e) => setCommentInput(e.target.value)}
-                    placeholder="댓글 달기..."
-                    className="flex-1 px-3.5 py-2 rounded-full bg-[#F4F4F5] text-xs text-zinc-900 focus:outline-none"
+                    placeholder={
+                      myUserId
+                        ? '댓글을 입력하세요...'
+                        : '로그인 후 댓글을 남길 수 있습니다'
+                    }
+                    onFocus={() => {
+                      if (!myUserId) onOpenAuth();
+                    }}
+                    className="flex-1 px-3.5 py-2.5 rounded-full bg-[#F4F4F5] text-xs text-zinc-900 focus:outline-none"
                   />
                   <button
                     type="submit"
                     disabled={!commentInput.trim() || isSubmittingComment}
-                    className="w-8 h-8 rounded-full bg-zinc-950 text-white flex items-center justify-center disabled:opacity-30 cursor-pointer"
+                    className="w-9 h-9 rounded-full bg-zinc-950 text-white flex items-center justify-center disabled:opacity-30 cursor-pointer shrink-0"
                   >
                     <Send className="w-3.5 h-3.5" />
                   </button>

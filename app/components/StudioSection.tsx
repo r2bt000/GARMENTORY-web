@@ -47,14 +47,12 @@ interface StudioSectionProps {
   isGeneratingLookbook: boolean;
   stylistResult: StylistResult | null;
   lookbookStatusHint: string;
-  lookbookMissingKey: boolean;
   isSavingLookbook: boolean;
   onGenerateAIOutfit: () => void;
   onShootLookbookPhoto: () => void;
   onSaveLookbook: () => void;
   onDownloadImage: (url: string, title: string) => void;
   onZoomImage: (url: string) => void;
-  onOpenApiModal: () => void;
   onOpenClothUpload: () => void;
 }
 
@@ -82,14 +80,12 @@ export default function StudioSection({
   isGeneratingLookbook,
   stylistResult,
   lookbookStatusHint,
-  lookbookMissingKey,
   isSavingLookbook,
   onGenerateAIOutfit,
   onShootLookbookPhoto,
   onSaveLookbook,
   onDownloadImage,
   onZoomImage,
-  onOpenApiModal,
   onOpenClothUpload,
 }: StudioSectionProps) {
   const validSelectedIds = selectedClothIds.filter((id) =>
@@ -118,7 +114,6 @@ export default function StudioSection({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-7 items-start">
-        {/* 좌측: 무테두리 소프트 그레이 스튜디오 컨트롤 */}
         <div className="lg:col-span-4 rounded-3xl bg-[#F7F7F8] p-5 sm:p-6 space-y-6">
           <div className="space-y-2.5">
             <p className="text-xs font-extrabold text-zinc-900">스타일 무드</p>
@@ -277,7 +272,7 @@ export default function StudioSection({
 
             <label className="flex items-center justify-between pt-1 cursor-pointer select-none">
               <span className="text-[11px] font-medium text-zinc-600">
-                코디 생성 시 정면 모델샷 자동 촬영
+                코디 생성 시 모델샷 자동 촬영
               </span>
               <input
                 type="checkbox"
@@ -303,7 +298,6 @@ export default function StudioSection({
           </button>
         </div>
 
-        {/* 우측: 슬롯 트레이 + 정면 화이트 스튜디오 결과 */}
         <div className="lg:col-span-8 space-y-6">
           <div className="rounded-3xl bg-[#F7F7F8] p-5 sm:p-6 space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -419,13 +413,14 @@ export default function StudioSection({
             )}
           </div>
 
-          {/* 정면 화이트 스튜디오 모델샷 & 스타일링 리포트 */}
           {stylistResult && (
             <div className="rounded-3xl bg-[#F7F7F8] p-5 sm:p-6 space-y-5 animate-fade-soft">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <span className="text-[11px] font-bold text-zinc-400">
-                    {stylistResult.genre} · {stylistResult.lookbookPresetLabel || (lookbookConcept === 'street' ? '거리샷' : '스튜디오 샷')}
+                    {stylistResult.genre} ·{' '}
+                    {stylistResult.lookbookPresetLabel ||
+                      (lookbookConcept === 'street' ? '거리샷' : '스튜디오 샷')}
                   </span>
                   <h3 className="text-lg font-extrabold text-zinc-950 mt-0.5">
                     {stylistResult.title}
@@ -451,10 +446,14 @@ export default function StudioSection({
                     <div className="aspect-[3/4] rounded-2xl bg-white flex flex-col items-center justify-center p-6 text-center space-y-3">
                       <div className="w-9 h-9 border-3 border-zinc-200 border-t-zinc-950 rounded-full animate-spin" />
                       <p className="text-xs font-bold text-zinc-900">
-                        {lookbookConcept === 'street' ? '성수·한남 거리샷 스냅 촬영 중...' : '화이트 스튜디오 모델샷 촬영 중...'}
+                        {lookbookConcept === 'street'
+                          ? '성수·한남 거리샷 스냅 촬영 중...'
+                          : '화이트 스튜디오 모델샷 촬영 중...'}
                       </p>
                       <p className="text-[11px] text-zinc-400">
-                        {lookbookConcept === 'street' ? '자연광 스트릿 배경에서 실사 모델 착장을 촬영하고 있습니다 (약 8~12초)' : '순백색 호리존 조명에서 실사 모델 착장을 촬영하고 있습니다 (약 8~12초)'}
+                        {lookbookConcept === 'street'
+                          ? '자연광 스트릿 배경에서 실사 모델 착장을 촬영하고 있습니다 (약 8~12초)'
+                          : '순백색 호리존 조명에서 실사 모델 착장을 촬영하고 있습니다 (약 8~12초)'}
                       </p>
                     </div>
                   ) : stylistResult.lookbookImage ? (
@@ -505,24 +504,13 @@ export default function StudioSection({
                         onClick={onShootLookbookPhoto}
                         className="px-4 py-2.5 rounded-full bg-zinc-950 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
                       >
-                        <Camera className="w-3.5 h-3.5" /> 정면 모델샷 촬영하기
+                        <Camera className="w-3.5 h-3.5" /> 모델샷 촬영하기
                       </button>
 
                       {lookbookStatusHint && (
-                        <div className="space-y-1.5">
-                          <p className="text-[11px] text-zinc-500 leading-relaxed">
-                            {lookbookStatusHint}
-                          </p>
-                          {lookbookMissingKey && (
-                            <button
-                              type="button"
-                              onClick={onOpenApiModal}
-                              className="text-[11px] font-bold text-zinc-950 underline cursor-pointer"
-                            >
-                              API 설정 열기
-                            </button>
-                          )}
-                        </div>
+                        <p className="text-[11px] text-zinc-500 leading-relaxed">
+                          {lookbookStatusHint}
+                        </p>
                       )}
                     </div>
                   )}
@@ -530,7 +518,7 @@ export default function StudioSection({
 
                 <div className="md:col-span-7 space-y-4">
                   <div className="rounded-2xl bg-white p-4 space-y-2">
-                    <p className="text-xs font-extrabold text-zinc-950">
+                    <p className="text-xs font-extrabold text-zinc-900">
                       스타일링 디렉팅 노트
                     </p>
                     <p className="text-xs text-zinc-600 leading-relaxed">

@@ -2,14 +2,13 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
-import { Plus, SlidersHorizontal } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import NewsletterHomeSection from './components/NewsletterHomeSection';
 import StyleFeedSection from './components/StyleFeedSection';
 import StudioSection from './components/StudioSection';
 import ProfileAndClosetSection from './components/ProfileAndClosetSection';
 import AppModals from './components/AppModals';
 import {
-  type ApiConfig,
   type ArticleReaderDetail,
   type CategoryType,
   type ClothItem,
@@ -24,8 +23,8 @@ import {
   type OtherProfileSubTab,
   type PhotoSideType,
   type Proposal,
+  type ProposalReply,
   type SavedLook,
-  STEP6_SOCIAL_SQL,
   STORAGE_BUCKET,
   STORAGE_KEYS,
   type StyleComment,
@@ -40,22 +39,68 @@ import {
   createMinimalPlaceholderSvg,
   decodeWardrobeSourceMeta,
   encodeWardrobeSourceMeta,
+  extractAvatarFromDna,
   formatRelativeTime,
   stripWardrobeMetaHash,
 } from './lib/socialConstants';
 
+function parseProposalRow(p: Record<string, unknown>): Proposal {
+  const rawSnap = p.items_snapshot;
+  let itemsSnapshot: ClothItem[] = [];
+  let likedUserIds: string[] = [];
+  let replies: ProposalReply[] = [];
+  let proposerAvatar = '';
+
+  if (Array.isArray(rawSnap)) {
+    itemsSnapshot = rawSnap as ClothItem[];
+  } else if (rawSnap && typeof rawSnap === 'object') {
+    const obj = rawSnap as Record<string, unknown>;
+    if (Array.isArray(obj.items)) {
+      itemsSnapshot = obj.items as ClothItem[];
+    }
+    if (Array.isArray(obj.likedUserIds)) {
+      likedUserIds = obj.likedUserIds.map((u) => String(u));
+    }
+    if (Array.isArray(obj.replies)) {
+      replies = obj.replies as ProposalReply[];
+    }
+    if (typeof obj.proposerAvatar === 'string') {
+      proposerAvatar = obj.proposerAvatar;
+    }
+  }
+
+  return {
+    id: String(p.id),
+    proposer: String(p.proposer_handle || '@873oc'),
+    proposerUserId: p.proposer_user_id ? String(p.proposer_user_id) : undefined,
+    proposerAvatar: proposerAvatar || undefined,
+    note: String(p.note || ''),
+    itemIds: Array.isArray(p.item_ids)
+      ? p.item_ids.map((n: unknown) => Number(n))
+      : [],
+    itemsSnapshot,
+    likedUserIds,
+    replies,
+    likes: likedUserIds.length,
+    createdAt: formatRelativeTime(
+      typeof p.created_at === 'string' ? p.created_at : undefined
+    ),
+  };
+}
+
 export default function AuraFitClient() {
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
 
-  // 메인 탭: HOME(뉴스레터) · STYLE(피드) · STUDIO(코디·모델샷) · MY(마이페이지) + 타 유저 프로필 화면
+  // 메인 탭: HOME · STYLE · STUDIO · MY + 타 유저 프로필 화면
   const [currentTab, setCurrentTab] = useState<MainTab>('home');
   const [previousTab, setPreviousTab] = useState<MainTab>('style');
   const [mySubTab, setMySubTab] = useState<MyProfileSubTab>('posts');
   const [otherSubTab, setOtherSubTab] = useState<OtherProfileSubTab>('closet');
   const [viewingUserId, setViewingUserId] = useState<string | null>(null);
 
-  // 내 프로필 · 옷장 · 룩북 상태
+  // 내 프로필 · 프로필 사진 · 옷장 · 룩북 상태
   const [myHandle, setMyHandle] = useState<string>('@my_873oc');
+  const [myAvatarUrl, setMyAvatarUrl] = useState<string>('');
   const [myBio, setMyBio] = useState<string>(
     '옷장 아이템을 터치해 어울리는 코디를 자유롭게 제안해 주세요!'
   );
@@ -68,6 +113,7 @@ export default function AuraFitClient() {
     {
       id: 'me',
       handle: '@my_873oc',
+      avatarUrl: '',
       bio: '옷장 아이템을 터치해 어울리는 코디를 자유롭게 제안해 주세요!',
       isPublic: true,
       closet: [],
@@ -78,7 +124,8 @@ export default function AuraFitClient() {
   const [followEdges, setFollowEdges] = useState<
     { followerId: string; followingId: string }[]
   >([]);
-  const [needsSocialSql, setNeedsSocialSql] = useState<boolean>(false);
+  const likingPostSetRef = useRef<Set<number>>(new Set());
+  const likingProposalSetRef = useRef<Set<string>>(new Set());
 
   // HOME 뉴스레터 상태
   const [newsArticles, setNewsArticles] = useState<NewsletterArticle[]>([]);
@@ -92,7 +139,7 @@ export default function AuraFitClient() {
   const [isLoadingArticleDetail, setIsLoadingArticleDetail] =
     useState<boolean>(false);
 
-  // STUDIO 상태 (정면 화이트 스튜디오 모델샷 단독)
+  // STUDIO 상태 (거리샷 / 스튜디오 샷 선택 + 고양이·여우상 여성 모델)
   const [selectedGenre, setSelectedGenre] = useState<string>('미니멀');
   const [activeDetails, setActiveDetails] = useState<string[]>([
     '와이드 실루엣',
@@ -112,11 +159,10 @@ export default function AuraFitClient() {
     null
   );
   const [lookbookStatusHint, setLookbookStatusHint] = useState<string>('');
-  const [lookbookMissingKey, setLookbookMissingKey] = useState<boolean>(false);
   const [isSavingLookbook, setIsSavingLookbook] = useState<boolean>(false);
   const shootSessionRef = useRef<number>(0);
 
-  // 모달 & 인증 상태
+  // 모달 & 인증 상태 (시스템 설정 모달 제거 완료!)
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
@@ -166,66 +212,36 @@ export default function AuraFitClient() {
     useState<boolean>(false);
   const [isSavingClothEdit, setIsSavingClothEdit] = useState<boolean>(false);
 
-  const [apiModalOpen, setApiModalOpen] = useState<boolean>(false);
   const [zoomImageUrl, setZoomImageUrl] = useState<string>('');
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
-  const envSbUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-  const envSbKey =
+  const envSbUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
+  const envSbKey = (
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-    '';
-
-  const [apiConfig, setApiConfig] = useState<ApiConfig>({
-    geminiKey: '',
-    fashnKey: '',
-    supabaseUrl: envSbUrl,
-    supabaseKey: envSbKey,
-  });
-  const [cfgForm, setCfgForm] = useState<ApiConfig>({
-    geminiKey: '',
-    fashnKey: '',
-    supabaseUrl: envSbUrl,
-    supabaseKey: envSbKey,
-  });
+    ''
+  ).trim();
 
   const showToast = useCallback((message: string) => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, message }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 2700);
+    }, 2600);
   }, []);
 
   const supabaseClient: SupabaseClient | null = useMemo(() => {
-    const url = (envSbUrl || apiConfig.supabaseUrl).trim();
-    const key = (envSbKey || apiConfig.supabaseKey).trim();
-    if (!url || !key) return null;
+    if (!envSbUrl || !envSbKey) return null;
     try {
-      return createClient(url, key);
+      return createClient(envSbUrl, envSbKey);
     } catch {
       return null;
     }
-  }, [apiConfig.supabaseUrl, apiConfig.supabaseKey, envSbUrl, envSbKey]);
+  }, [envSbUrl, envSbKey]);
 
-  // 로컬 설정 및 캐시 로드
+  // 로컬 캐시 복원
   useEffect(() => {
     try {
-      const savedWardrobe = localStorage.getItem(STORAGE_KEYS.WARDROBE);
-      if (savedWardrobe) {
-        const parsed = JSON.parse(savedWardrobe);
-        if (Array.isArray(parsed)) setWardrobe(parsed);
-      }
-      const savedLooksRaw = localStorage.getItem(STORAGE_KEYS.SAVED_LOOKS);
-      if (savedLooksRaw) {
-        const parsed = JSON.parse(savedLooksRaw);
-        if (Array.isArray(parsed)) setSavedLooks(parsed);
-      }
-      const savedPostsRaw = localStorage.getItem(STORAGE_KEYS.STYLE_POSTS);
-      if (savedPostsRaw) {
-        const parsed = JSON.parse(savedPostsRaw);
-        if (Array.isArray(parsed)) setStylePosts(parsed);
-      }
       const savedNewsCache = localStorage.getItem(STORAGE_KEYS.NEWS_CACHE);
       if (savedNewsCache) {
         const parsedNews = JSON.parse(savedNewsCache);
@@ -239,23 +255,25 @@ export default function AuraFitClient() {
         const parsed = JSON.parse(savedBookmarks);
         if (Array.isArray(parsed)) setBookmarkedNewsIds(parsed);
       }
-      const savedCfg =
-        localStorage.getItem(STORAGE_KEYS.CONFIG) ||
-        localStorage.getItem('oblique_api_cfg_v5');
-      if (savedCfg) {
-        const parsed = JSON.parse(savedCfg) as Partial<ApiConfig>;
-        setApiConfig((prev) => ({
-          geminiKey: parsed.geminiKey || '',
-          fashnKey: parsed.fashnKey || '',
-          supabaseUrl: envSbUrl || parsed.supabaseUrl || prev.supabaseUrl,
-          supabaseKey: envSbKey || parsed.supabaseKey || prev.supabaseKey,
-        }));
+      const savedAvatar = localStorage.getItem(STORAGE_KEYS.MY_AVATAR);
+      if (savedAvatar) {
+        setMyAvatarUrl(savedAvatar);
+      }
+      const savedWardrobe = localStorage.getItem(STORAGE_KEYS.WARDROBE);
+      if (savedWardrobe) {
+        const parsed = JSON.parse(savedWardrobe);
+        if (Array.isArray(parsed)) setWardrobe(parsed);
+      }
+      const savedLooksRaw = localStorage.getItem(STORAGE_KEYS.SAVED_LOOKS);
+      if (savedLooksRaw) {
+        const parsed = JSON.parse(savedLooksRaw);
+        if (Array.isArray(parsed)) setSavedLooks(parsed);
       }
     } catch {
       // ignore
     }
     setIsHydrated(true);
-  }, [envSbUrl, envSbKey]);
+  }, []);
 
   useEffect(() => {
     if (!isHydrated) return;
@@ -264,7 +282,6 @@ export default function AuraFitClient() {
         STORAGE_KEYS.BOOKMARKED_NEWS,
         JSON.stringify(bookmarkedNewsIds)
       );
-      localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(apiConfig));
       if (!authUser) {
         localStorage.setItem(STORAGE_KEYS.WARDROBE, JSON.stringify(wardrobe));
         localStorage.setItem(
@@ -275,41 +292,33 @@ export default function AuraFitClient() {
     } catch {
       // ignore
     }
-  }, [isHydrated, bookmarkedNewsIds, apiConfig, wardrobe, savedLooks, authUser]);
+  }, [isHydrated, bookmarkedNewsIds, wardrobe, savedLooks, authUser]);
 
-  // HOME 뉴스레터 자동 로드 (영문 기사 포함 시 서버에서 한국어 자동 번역)
-  const fetchNewsletterFeed = useCallback(
-    async (forceRefresh = false) => {
-      setIsLoadingNews(true);
-      try {
-        const headers: Record<string, string> = {};
-        if (apiConfig.geminiKey) {
-          headers['x-gemini-key'] = apiConfig.geminiKey;
+  // HOME 뉴스레터 자동 로드
+  const fetchNewsletterFeed = useCallback(async (forceRefresh = false) => {
+    setIsLoadingNews(true);
+    try {
+      const res = await fetch(
+        `/api/newsletter${forceRefresh ? '?refresh=1' : ''}`
+      );
+      const json = await res.json();
+      if (Array.isArray(json?.articles) && json.articles.length > 0) {
+        setNewsArticles(json.articles);
+        try {
+          localStorage.setItem(
+            STORAGE_KEYS.NEWS_CACHE,
+            JSON.stringify(json.articles)
+          );
+        } catch {
+          // ignore
         }
-        const res = await fetch(
-          `/api/newsletter${forceRefresh ? '?refresh=1' : ''}`,
-          { headers }
-        );
-        const json = await res.json();
-        if (Array.isArray(json?.articles) && json.articles.length > 0) {
-          setNewsArticles(json.articles);
-          try {
-            localStorage.setItem(
-              STORAGE_KEYS.NEWS_CACHE,
-              JSON.stringify(json.articles)
-            );
-          } catch {
-            // ignore storage quota
-          }
-        }
-      } catch {
-        // ignore network hiccup
-      } finally {
-        setIsLoadingNews(false);
       }
-    },
-    [apiConfig.geminiKey]
-  );
+    } catch {
+      // ignore
+    } finally {
+      setIsLoadingNews(false);
+    }
+  }, []);
 
   useEffect(() => {
     void fetchNewsletterFeed(false);
@@ -327,7 +336,6 @@ export default function AuraFitClient() {
           url: article.url,
           title: article.originalTitle || article.title,
           summary: article.originalSummary || article.summary,
-          clientGeminiKey: apiConfig.geminiKey,
         }),
       });
       const json = await res.json();
@@ -345,17 +353,18 @@ export default function AuraFitClient() {
         });
       }
     } catch {
-      // fallback to RSS summary
+      // fallback
     } finally {
       setIsLoadingArticleDetail(false);
     }
   };
 
-  // 클라우드 전체 동기화 (프로필 · 전체공개 옷장 · 룩북 · 코디제안 · STYLE 피드 · 좋아요 · 댓글 · 팔로우)
+  // 클라우드 전체 동기화 (모르는 사람·비로그인 방문자도 KREAM처럼 모든 STYLE 게시물·옷장 공개 열람 가능!)
   const loadCloudData = useCallback(
     async (client: SupabaseClient, user: User | null) => {
       try {
         let activeHandle = '@my_873oc';
+        let activeAvatar = '';
         let activeBio =
           '옷장 아이템을 터치해 어울리는 코디를 자유롭게 제안해 주세요!';
 
@@ -382,9 +391,14 @@ export default function AuraFitClient() {
               /^@(aurafit|oblique)_/,
               '@873oc_'
             );
-            activeBio =
-              profData.bio || profData.style_request || activeBio;
-            // 기본 전체 공개 보장
+            activeAvatar =
+              (typeof profData.avatar_url === 'string' && profData.avatar_url) ||
+              extractAvatarFromDna(profData.dna) ||
+              (typeof user.user_metadata?.avatar_url === 'string'
+                ? user.user_metadata.avatar_url
+                : '');
+            activeBio = profData.bio || profData.style_request || activeBio;
+
             if (profData.is_public === false) {
               await client
                 .from('profiles')
@@ -393,6 +407,10 @@ export default function AuraFitClient() {
             }
           } else {
             activeHandle = defaultNick;
+            activeAvatar =
+              typeof user.user_metadata?.avatar_url === 'string'
+                ? user.user_metadata.avatar_url
+                : '';
             await client.from('profiles').upsert({
               id: user.id,
               handle: defaultNick,
@@ -401,9 +419,15 @@ export default function AuraFitClient() {
           }
 
           setMyHandle(activeHandle);
+          setMyAvatarUrl(activeAvatar);
           setMyBio(activeBio);
+          try {
+            localStorage.setItem(STORAGE_KEYS.MY_AVATAR, activeAvatar);
+          } catch {
+            // ignore
+          }
 
-          // 내 옷장 조회 및 레거시 샘플 6종 자동 정리
+          // 내 옷장 조회 및 레거시 샘플 정리
           const { data: wRows } = await client
             .from('wardrobe_items')
             .select('*')
@@ -451,7 +475,6 @@ export default function AuraFitClient() {
               };
             });
             setWardrobe(mappedCloset);
-            // 옷이 있고 아직 포스트가 없을 때는 옷장 확인이 편하도록 유연 유지
             if (mappedCloset.length > 0) {
               setMySubTab((prev) => (prev === 'posts' ? 'closet' : prev));
             }
@@ -492,50 +515,54 @@ export default function AuraFitClient() {
                   lookbookImage: parsedCover,
                   stylePresetLabel:
                     (!Array.isArray(rawJson) && rawJson?.stylePresetLabel) ||
-                    '정면 화이트 스튜디오',
+                    '스튜디오 샷',
                 };
               })
             );
           }
         }
 
-        // 모든 유저 공개 프로필 · 옷장 · 코디 제안 조회 (비로그인 방문자도 STYLE 및 타인 옷장 열람 가능)
-        const { data: pubProfiles } = await client
-          .from('profiles')
-          .select('*')
-          .limit(60);
+        // 모든 공개 프로필 · 공개 옷장 · 코디 제안 · STYLE 게시물 병렬 조회
+        const [
+          { data: pubProfiles },
+          { data: allPubItems },
+          { data: allProps },
+          { data: postRows, error: postErr },
+        ] = await Promise.all([
+          client.from('profiles').select('*').limit(100),
+          client
+            .from('wardrobe_items')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(500),
+          client
+            .from('outfit_proposals')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(200),
+          client
+            .from('style_posts')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(100),
+        ]);
 
-        const { data: allPubItems } = await client
-          .from('wardrobe_items')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(400);
-
-        const { data: allProps } = await client
-          .from('outfit_proposals')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(150);
+        const profAvatarLookup = new Map<string, string>();
+        if (user && activeAvatar) {
+          profAvatarLookup.set(user.id, activeAvatar);
+        }
+        (pubProfiles || []).forEach((pr) => {
+          const av =
+            (typeof pr.avatar_url === 'string' && pr.avatar_url) ||
+            extractAvatarFromDna(pr.dna) ||
+            '';
+          if (av) profAvatarLookup.set(String(pr.id), av);
+        });
 
         const myProps: Proposal[] = user
           ? (allProps || [])
               .filter((p) => p.target_user_id === user.id)
-              .map((p) => ({
-                id: String(p.id),
-                proposer: p.proposer_handle,
-                proposerUserId: p.proposer_user_id
-                  ? String(p.proposer_user_id)
-                  : undefined,
-                note: p.note,
-                itemIds: Array.isArray(p.item_ids)
-                  ? p.item_ids.map((n: number | string) => Number(n))
-                  : [],
-                itemsSnapshot: Array.isArray(p.items_snapshot)
-                  ? p.items_snapshot
-                  : undefined,
-                likes: Number(p.likes || 1),
-                createdAt: formatRelativeTime(p.created_at),
-              }))
+              .map((p) => parseProposalRow(p as Record<string, unknown>))
           : [];
 
         const liveOthers: CommunityUser[] = (pubProfiles || [])
@@ -569,22 +596,12 @@ export default function AuraFitClient() {
 
             const uProps: Proposal[] = (allProps || [])
               .filter((p) => p.target_user_id === prof.id)
-              .map((p) => ({
-                id: String(p.id),
-                proposer: p.proposer_handle,
-                proposerUserId: p.proposer_user_id
-                  ? String(p.proposer_user_id)
-                  : undefined,
-                note: p.note,
-                itemIds: Array.isArray(p.item_ids)
-                  ? p.item_ids.map((n: number | string) => Number(n))
-                  : [],
-                itemsSnapshot: Array.isArray(p.items_snapshot)
-                  ? p.items_snapshot
-                  : undefined,
-                likes: Number(p.likes || 1),
-                createdAt: formatRelativeTime(p.created_at),
-              }));
+              .map((p) => parseProposalRow(p as Record<string, unknown>));
+
+            const av =
+              (typeof prof.avatar_url === 'string' && prof.avatar_url) ||
+              extractAvatarFromDna(prof.dna) ||
+              '';
 
             return {
               id: String(prof.id),
@@ -592,6 +609,7 @@ export default function AuraFitClient() {
                 /^@(aurafit|oblique)_/,
                 '@873oc_'
               ),
+              avatarUrl: av,
               bio:
                 prof.bio ||
                 prof.style_request ||
@@ -606,6 +624,7 @@ export default function AuraFitClient() {
         const meEntry: CommunityUser = {
           id: 'me',
           handle: activeHandle,
+          avatarUrl: activeAvatar,
           bio: activeBio,
           isPublic: true,
           isLiveCloudUser: Boolean(user),
@@ -614,31 +633,20 @@ export default function AuraFitClient() {
         };
         setCommunityUsers([meEntry, ...liveOthers]);
 
-        // STYLE 피드 게시물 · 좋아요 · 댓글 · 팔로우 조회
-        const { data: postRows, error: postErr } = await client
-          .from('style_posts')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(80);
-
-        if (postErr) {
-          // 테이블 미생성(42P01 / PGRST205) 상태 감지
-          setNeedsSocialSql(true);
-        } else {
-          setNeedsSocialSql(false);
-          const { data: likeRows } = await client
-            .from('style_post_likes')
-            .select('*')
-            .limit(1000);
-          const { data: commentRows } = await client
-            .from('style_post_comments')
-            .select('*')
-            .order('created_at', { ascending: true })
-            .limit(500);
-          const { data: followRows } = await client
-            .from('user_follows')
-            .select('*')
-            .limit(1000);
+        if (!postErr && Array.isArray(postRows)) {
+          const [
+            { data: likeRows },
+            { data: commentRows },
+            { data: followRows },
+          ] = await Promise.all([
+            client.from('style_post_likes').select('*').limit(2000),
+            client
+              .from('style_post_comments')
+              .select('*')
+              .order('created_at', { ascending: true })
+              .limit(1000),
+            client.from('user_follows').select('*').limit(2000),
+          ]);
 
           if (Array.isArray(followRows)) {
             setFollowEdges(
@@ -649,46 +657,58 @@ export default function AuraFitClient() {
             );
           }
 
-          if (Array.isArray(postRows)) {
-            const mappedPosts: StylePost[] = postRows.map((pr) => {
-              const pid = Number(pr.id);
-              const pLikes = (likeRows || [])
-                .filter((lk) => Number(lk.post_id) === pid)
-                .map((lk) => String(lk.user_id));
-              const pComments: StyleComment[] = (commentRows || [])
-                .filter((cm) => Number(cm.post_id) === pid)
-                .map((cm) => ({
+          const mappedPosts: StylePost[] = postRows.map((pr) => {
+            const pid = Number(pr.id);
+            const pUid = String(pr.user_id);
+            const pLikes = Array.from(
+              new Set(
+                (likeRows || [])
+                  .filter((lk) => Number(lk.post_id) === pid)
+                  .map((lk) => String(lk.user_id))
+              )
+            );
+            const pComments: StyleComment[] = (commentRows || [])
+              .filter((cm) => Number(cm.post_id) === pid)
+              .map((cm) => {
+                const cUid = String(cm.user_id);
+                return {
                   id: String(cm.id),
                   postId: pid,
-                  userId: String(cm.user_id),
-                  authorHandle: String(cm.author_handle || '@873oc'),
+                  userId: cUid,
+                  authorHandle: String(cm.author_handle || '@873oc').replace(
+                    /^@(aurafit|oblique)_/,
+                    '@873oc_'
+                  ),
+                  authorAvatar: profAvatarLookup.get(cUid) || undefined,
                   body: String(cm.body || ''),
                   createdAt: formatRelativeTime(cm.created_at),
-                }));
-              const tagged: TaggedClothRef[] = Array.isArray(pr.tagged_items)
-                ? pr.tagged_items
-                : [];
-              return {
-                id: pid,
-                userId: String(pr.user_id),
-                authorHandle: String(pr.author_handle || '@873oc').replace(
-                  /^@(aurafit|oblique)_/,
-                  '@873oc_'
-                ),
-                imageUrl: String(pr.image_url || ''),
-                caption: String(pr.caption || ''),
-                styleTags: Array.isArray(pr.style_tags) ? pr.style_tags : [],
-                taggedItems: tagged,
-                likeUserIds: pLikes,
-                comments: pComments,
-                createdAt: formatRelativeTime(pr.created_at),
-                createdIso: String(pr.created_at || new Date().toISOString()),
-              };
-            });
-            setStylePosts(mappedPosts);
-            if (user && mappedPosts.some((mp) => mp.userId === user.id)) {
-              setMySubTab('posts');
-            }
+                };
+              });
+            const tagged: TaggedClothRef[] = Array.isArray(pr.tagged_items)
+              ? pr.tagged_items
+              : [];
+            return {
+              id: pid,
+              userId: pUid,
+              authorHandle: String(pr.author_handle || '@873oc').replace(
+                /^@(aurafit|oblique)_/,
+                '@873oc_'
+              ),
+              authorAvatar: profAvatarLookup.get(pUid) || undefined,
+              imageUrl: String(pr.image_url || ''),
+              caption: String(pr.caption || ''),
+              styleTags: Array.isArray(pr.style_tags) ? pr.style_tags : [],
+              taggedItems: tagged,
+              likeUserIds: pLikes,
+              comments: pComments,
+              createdAt: formatRelativeTime(pr.created_at),
+              createdIso: String(pr.created_at || new Date().toISOString()),
+            };
+          });
+
+          setStylePosts(mappedPosts);
+          if (user && mappedPosts.some((mp) => mp.userId === user.id)) {
+            setMySubTab('posts');
           }
         }
       } catch {
@@ -721,7 +741,6 @@ export default function AuraFitClient() {
     return () => subscription.unsubscribe();
   }, [supabaseClient, loadCloudData]);
 
-  // Escape 키로 라이트박스 닫기
   useEffect(() => {
     if (!zoomImageUrl) return;
     const onKey = (e: KeyboardEvent) => {
@@ -735,7 +754,7 @@ export default function AuraFitClient() {
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabaseClient) {
-      setAuthMessage('Supabase 연결 설정을 확인해 주세요.');
+      setAuthMessage('서비스 연결을 확인해 주세요.');
       return;
     }
     setAuthLoading(true);
@@ -781,10 +800,7 @@ export default function AuraFitClient() {
   };
 
   const handleOAuthLogin = async (provider: 'google' | 'kakao') => {
-    if (!supabaseClient) {
-      showToast('Supabase 연결이 필요합니다.');
-      return;
-    }
+    if (!supabaseClient) return;
     await supabaseClient.auth.signInWithOAuth({
       provider,
       options: {
@@ -799,6 +815,7 @@ export default function AuraFitClient() {
       await supabaseClient.auth.signOut();
     }
     setAuthUser(null);
+    setMyAvatarUrl('');
     setWardrobe([]);
     setSavedLooks([]);
     setSelectedClothIds([]);
@@ -806,13 +823,12 @@ export default function AuraFitClient() {
     showToast('로그아웃되었습니다.');
   };
 
-  // 타 사용자 프로필 진입 헬퍼 (내 아이디 클릭 시 마이페이지로 이동!)
+  // 타 사용자 프로필 진입
   const handleVisitUserProfile = (userId: string, handleHint?: string) => {
     if (!userId || userId === 'me' || (authUser && userId === authUser.id)) {
       setCurrentTab('my');
       return;
     }
-    // 아직 communityUsers 목록에 없는 신규 게시물 작성자일 경우 임시 엔트리 보강
     setCommunityUsers((prev) => {
       if (prev.some((u) => u.id === userId)) return prev;
       return [
@@ -820,6 +836,7 @@ export default function AuraFitClient() {
         {
           id: userId,
           handle: handleHint || '@873oc_user',
+          avatarUrl: '',
           bio: '옷장 아이템을 터치해 어울리는 코디를 제안해 주세요!',
           isPublic: true,
           isLiveCloudUser: true,
@@ -855,7 +872,7 @@ export default function AuraFitClient() {
             !(f.followerId === authUser.id && f.followingId === targetUserId)
         )
       );
-      if (supabaseClient && !needsSocialSql) {
+      if (supabaseClient) {
         await supabaseClient
           .from('user_follows')
           .delete()
@@ -868,7 +885,7 @@ export default function AuraFitClient() {
         ...prev,
         { followerId: authUser.id, followingId: targetUserId },
       ]);
-      if (supabaseClient && !needsSocialSql) {
+      if (supabaseClient) {
         await supabaseClient.from('user_follows').insert({
           follower_id: authUser.id,
           following_id: targetUserId,
@@ -878,7 +895,7 @@ export default function AuraFitClient() {
     }
   };
 
-  // STYLE 게시물 업로드 (실제 착샷 사진 + 내 옷장 착용 아이템 태그)
+  // STYLE 게시물 업로드
   const handleCreateStylePost = async (draft: {
     file: File;
     caption: string;
@@ -928,7 +945,7 @@ export default function AuraFitClient() {
 
       let createdPostId = Date.now();
 
-      if (supabaseClient && !needsSocialSql) {
+      if (supabaseClient) {
         const { data, error } = await supabaseClient
           .from('style_posts')
           .insert({
@@ -951,6 +968,7 @@ export default function AuraFitClient() {
         id: createdPostId,
         userId: authUser.id,
         authorHandle: myHandle,
+        authorAvatar: myAvatarUrl || undefined,
         imageUrl: finalPhotoUrl,
         caption: draft.caption.trim(),
         styleTags: draft.styleTags,
@@ -961,16 +979,8 @@ export default function AuraFitClient() {
         createdIso: new Date().toISOString(),
       };
 
-      setStylePosts((prev) => {
-        const next = [newPost, ...prev];
-        try {
-          localStorage.setItem(STORAGE_KEYS.STYLE_POSTS, JSON.stringify(next));
-        } catch {
-          // ignore
-        }
-        return next;
-      });
-      showToast('STYLE 피드에 새 게시물이 등록되었습니다!');
+      setStylePosts((prev) => [newPost, ...prev]);
+      showToast('STYLE 피드에 게시물이 등록되었습니다!');
       return true;
     } catch {
       showToast('게시물 업로드 중 오류가 발생했습니다.');
@@ -978,49 +988,61 @@ export default function AuraFitClient() {
     }
   };
 
+  // STYLE 게시물 하트 토글 (사용자당 정확히 1회 좋아요 · 재클릭 시 취소)
   const handleToggleLikePost = async (post: StylePost) => {
     if (!authUser) {
       setAuthModalOpen(true);
       return;
     }
+    if (likingPostSetRef.current.has(post.id)) return;
+    likingPostSetRef.current.add(post.id);
+
     const liked = post.likeUserIds.includes(authUser.id);
 
     setStylePosts((prev) =>
-      prev.map((p) =>
-        p.id === post.id
-          ? {
-              ...p,
-              likeUserIds: liked
-                ? p.likeUserIds.filter((uid) => uid !== authUser.id)
-                : [...p.likeUserIds, authUser.id],
-            }
-          : p
-      )
+      prev.map((p) => {
+        if (p.id !== post.id) return p;
+        const uniqueSet = new Set(p.likeUserIds);
+        if (liked) {
+          uniqueSet.delete(authUser.id);
+        } else {
+          uniqueSet.add(authUser.id);
+        }
+        return {
+          ...p,
+          likeUserIds: Array.from(uniqueSet),
+        };
+      })
     );
 
-    if (supabaseClient && !needsSocialSql) {
-      if (liked) {
-        await supabaseClient
-          .from('style_post_likes')
-          .delete()
-          .eq('post_id', post.id)
-          .eq('user_id', authUser.id);
-      } else {
-        await supabaseClient.from('style_post_likes').insert({
-          post_id: post.id,
-          user_id: authUser.id,
-        });
+    try {
+      if (supabaseClient) {
+        if (liked) {
+          await supabaseClient
+            .from('style_post_likes')
+            .delete()
+            .eq('post_id', post.id)
+            .eq('user_id', authUser.id);
+        } else {
+          await supabaseClient.from('style_post_likes').upsert({
+            post_id: post.id,
+            user_id: authUser.id,
+          });
+        }
       }
+    } finally {
+      likingPostSetRef.current.delete(post.id);
     }
   };
 
+  // STYLE 게시물 댓글 등록 & 삭제
   const handleSubmitComment = async (post: StylePost, commentBody: string) => {
     if (!authUser) {
       setAuthModalOpen(true);
       return;
     }
     let newId = `cm_${Date.now()}`;
-    if (supabaseClient && !needsSocialSql) {
+    if (supabaseClient) {
       const { data } = await supabaseClient
         .from('style_post_comments')
         .insert({
@@ -1039,6 +1061,7 @@ export default function AuraFitClient() {
       postId: post.id,
       userId: authUser.id,
       authorHandle: myHandle,
+      authorAvatar: myAvatarUrl || undefined,
       body: commentBody,
       createdAt: '방금 전',
     };
@@ -1048,6 +1071,25 @@ export default function AuraFitClient() {
         p.id === post.id ? { ...p, comments: [...p.comments, cm] } : p
       )
     );
+  };
+
+  const handleDeleteComment = async (post: StylePost, comment: StyleComment) => {
+    if (!authUser || comment.userId !== authUser.id) return;
+    setStylePosts((prev) =>
+      prev.map((p) =>
+        p.id === post.id
+          ? { ...p, comments: p.comments.filter((c) => c.id !== comment.id) }
+          : p
+      )
+    );
+    if (supabaseClient && !comment.id.startsWith('cm_')) {
+      await supabaseClient
+        .from('style_post_comments')
+        .delete()
+        .eq('id', Number(comment.id))
+        .eq('user_id', authUser.id);
+    }
+    showToast('댓글이 삭제되었습니다.');
   };
 
   const handleDeleteStylePost = async (post: StylePost) => {
@@ -1062,20 +1104,23 @@ export default function AuraFitClient() {
             .remove([decodeURIComponent(rawPath)]);
         }
       }
-      if (!needsSocialSql) {
-        await supabaseClient
-          .from('style_posts')
-          .delete()
-          .eq('id', post.id)
-          .eq('user_id', authUser.id);
-      }
+      await supabaseClient
+        .from('style_posts')
+        .delete()
+        .eq('id', post.id)
+        .eq('user_id', authUser.id);
     }
     setStylePosts((prev) => prev.filter((p) => p.id !== post.id));
     showToast('게시물이 삭제되었습니다.');
   };
 
-  // 내 프로필 업데이트 (핸들 · 소개)
-  const handleUpdateMyProfile = async (nextHandle: string, nextBio: string) => {
+  // MY 프로필 사진 · 아이디 · 소개 업데이트
+  const handleUpdateMyProfile = async (
+    nextHandle: string,
+    nextBio: string,
+    avatarFile: File | null,
+    removeAvatar: boolean
+  ) => {
     const cleanH =
       '@' +
       nextHandle
@@ -1086,26 +1131,96 @@ export default function AuraFitClient() {
     const finalHandle = cleanH.length > 1 ? cleanH : myHandle;
     const finalBio = nextBio.trim();
 
+    let nextAvatarUrl = removeAvatar ? '' : myAvatarUrl;
+
+    if (avatarFile) {
+      try {
+        const comp = await compressImageToWebP(avatarFile, 420, 0.86);
+        nextAvatarUrl = comp.dataUrl;
+
+        if (authUser && supabaseClient && comp.blob) {
+          const fname = `avatar_${Date.now()}_${Math.random()
+            .toString(36)
+            .slice(2, 6)}.${comp.ext}`;
+          const sp = `${authUser.id}/${fname}`;
+          const { error: upErr } = await supabaseClient.storage
+            .from(STORAGE_BUCKET)
+            .upload(sp, comp.blob, {
+              contentType: comp.mimeType,
+              cacheControl: '3600',
+              upsert: false,
+            });
+          if (!upErr) {
+            const { data: pubData } = supabaseClient.storage
+              .from(STORAGE_BUCKET)
+              .getPublicUrl(sp);
+            if (pubData?.publicUrl) {
+              nextAvatarUrl = pubData.publicUrl;
+            }
+          }
+        }
+      } catch {
+        showToast('프로필 사진을 처리하지 못했습니다.');
+        return;
+      }
+    }
+
     setMyHandle(finalHandle);
     setMyBio(finalBio);
+    setMyAvatarUrl(nextAvatarUrl);
+    try {
+      localStorage.setItem(STORAGE_KEYS.MY_AVATAR, nextAvatarUrl);
+    } catch {
+      // ignore
+    }
+
+    // 내 기존 게시물 작성자 핸들·프로필사진 즉시 동기화
+    if (authUser) {
+      setStylePosts((prev) =>
+        prev.map((p) =>
+          p.userId === authUser.id
+            ? {
+                ...p,
+                authorHandle: finalHandle,
+                authorAvatar: nextAvatarUrl || undefined,
+              }
+            : p
+        )
+      );
+    }
 
     if (authUser && supabaseClient) {
+      const dnaArray = nextAvatarUrl
+        ? ['873oc Member', `avatar:${nextAvatarUrl}`]
+        : ['873oc Member'];
+
       const { error } = await supabaseClient.from('profiles').upsert({
         id: authUser.id,
         handle: finalHandle,
+        bio: finalBio,
         style_request: finalBio,
+        avatar_url: nextAvatarUrl,
+        dna: dnaArray,
         is_public: true,
         updated_at: new Date().toISOString(),
       });
+
       if (error) {
-        showToast(`프로필 저장 오류: ${error.message}`);
-        return;
+        // avatar_url·bio 컬럼 미적용 환경에서도 dna 백업으로 100% 저장 보장
+        await supabaseClient.from('profiles').upsert({
+          id: authUser.id,
+          handle: finalHandle,
+          style_request: finalBio,
+          dna: dnaArray,
+          is_public: true,
+          updated_at: new Date().toISOString(),
+        });
       }
     }
     showToast('프로필이 저장되었습니다.');
   };
 
-  // 옷장 코디 슬롯 터치 선택 (같은 카테고리는 자동 교체)
+  // 옷장 코디 슬롯 터치 선택
   const toggleTouchCloth = (itemId: number) => {
     const target = wardrobe.find((w) => w.id === itemId);
     if (!target) return;
@@ -1139,7 +1254,7 @@ export default function AuraFitClient() {
     return picked;
   };
 
-  // STUDIO: 정면 화이트 스튜디오 모델샷 단독 촬영
+  // STUDIO 모델샷 촬영
   const prepareGarmentsForLookbook = async (sourceItems: ClothItem[]) => {
     return Promise.all(
       sourceItems.map(async (it) => {
@@ -1210,7 +1325,6 @@ export default function AuraFitClient() {
     const sessionId = Date.now();
     shootSessionRef.current = sessionId;
     setLookbookStatusHint('');
-    setLookbookMissingKey(false);
     setIsGeneratingLookbook(true);
 
     try {
@@ -1236,8 +1350,6 @@ export default function AuraFitClient() {
           selectedDetails: activeDetails,
           garments: preparedGarments,
           userModelImage: preparedUserPhoto,
-          clientGeminiKey: apiConfig.geminiKey,
-          clientFashnKey: apiConfig.fashnKey,
         }),
       });
 
@@ -1246,9 +1358,6 @@ export default function AuraFitClient() {
 
       if (!json?.success || typeof json.imageDataUrl !== 'string') {
         setIsGeneratingLookbook(false);
-        if (json?.missingKey) {
-          setLookbookMissingKey(true);
-        }
         setLookbookStatusHint(
           json?.message || '모델샷 촬영 중 오류가 발생했습니다.'
         );
@@ -1314,7 +1423,6 @@ export default function AuraFitClient() {
           items: picked.map((p) => ({ name: p.name, category: p.category })),
           selectedDetails: activeDetails,
           budget: '합리적 매치',
-          clientGeminiKey: apiConfig.geminiKey,
         }),
       });
       const data = await resp.json();
@@ -1326,7 +1434,7 @@ export default function AuraFitClient() {
         }
       }
     } catch {
-      // use local fallback note
+      // fallback note
     }
 
     setStylistResult({
@@ -1383,12 +1491,16 @@ export default function AuraFitClient() {
         }
       }
 
+      const labelToSave =
+        stylistResult.lookbookPresetLabel ||
+        (lookbookConcept === 'street' ? '거리샷' : '스튜디오 샷');
+
       if (authUser && supabaseClient) {
         const payload = persistedCoverUrl
           ? {
               items: stylistResult.items,
               lookbookImage: persistedCoverUrl,
-              stylePresetLabel: stylistResult.lookbookPresetLabel || (lookbookConcept === 'street' ? '거리샷' : '스튜디오 샷'),
+              stylePresetLabel: labelToSave,
             }
           : stylistResult.items;
 
@@ -1415,7 +1527,7 @@ export default function AuraFitClient() {
               items: stylistResult.items,
               note: data.note,
               lookbookImage: persistedCoverUrl,
-              stylePresetLabel: stylistResult.lookbookPresetLabel || (lookbookConcept === 'street' ? '거리샷' : '스튜디오 샷'),
+              stylePresetLabel: labelToSave,
             },
             ...prev,
           ]);
@@ -1433,7 +1545,7 @@ export default function AuraFitClient() {
           items: stylistResult.items,
           note: stylistResult.note,
           lookbookImage: persistedCoverUrl,
-          stylePresetLabel: stylistResult.lookbookPresetLabel || (lookbookConcept === 'street' ? '거리샷' : '스튜디오 샷'),
+          stylePresetLabel: labelToSave,
         },
         ...prev,
       ]);
@@ -1454,7 +1566,7 @@ export default function AuraFitClient() {
     setSavedLooks((prev) => prev.filter((l) => l.id !== lookId));
   };
 
-  // 의류 추가 · URL 스크래핑 · 사후 수정 · 삭제
+  // 의류 추가 · URL 추출 · 사후 수정 · 삭제
   const insertClothItem = async (
     draft: Omit<ClothItem, 'id'>
   ): Promise<ClothItem> => {
@@ -1638,7 +1750,7 @@ export default function AuraFitClient() {
         return;
       }
     } catch {
-      // fallback to manual input card
+      // fallback
     }
 
     setUrlPreview({
@@ -1895,7 +2007,29 @@ export default function AuraFitClient() {
     showToast('의류가 삭제되었습니다.');
   };
 
-  // 타 사용자 프로필 옷장에서 코디 조합 제안 전송
+  // 타 사용자 옷장 코디 제안 전송 & 사용자당 공감 하트 토글 & 코디 제안 답글 등록/삭제
+  const persistProposalEnvelope = async (
+    propId: string,
+    items: ClothItem[],
+    likedUserIds: string[],
+    replies: ProposalReply[],
+    proposerAvatar?: string
+  ) => {
+    if (!supabaseClient || propId.startsWith('prop_')) return;
+    await supabaseClient
+      .from('outfit_proposals')
+      .update({
+        likes: likedUserIds.length,
+        items_snapshot: {
+          items,
+          likedUserIds,
+          replies,
+          proposerAvatar: proposerAvatar || '',
+        },
+      })
+      .eq('id', propId);
+  };
+
   const handleSubmitProposalToUser = async (
     targetUser: CommunityUser,
     pickedIds: number[],
@@ -1910,6 +2044,13 @@ export default function AuraFitClient() {
     const snapshot = targetUser.closet.filter((c) => pickedIds.includes(c.id));
     let propId = `prop_${Date.now()}`;
 
+    const envelope = {
+      items: snapshot,
+      likedUserIds: [] as string[],
+      replies: [] as ProposalReply[],
+      proposerAvatar: myAvatarUrl || '',
+    };
+
     if (supabaseClient) {
       const { data } = await supabaseClient
         .from('outfit_proposals')
@@ -1919,8 +2060,8 @@ export default function AuraFitClient() {
           proposer_handle: myHandle,
           note: cleanNote,
           item_ids: pickedIds,
-          items_snapshot: snapshot,
-          likes: 1,
+          items_snapshot: envelope,
+          likes: 0,
         })
         .select('id')
         .maybeSingle();
@@ -1931,10 +2072,13 @@ export default function AuraFitClient() {
       id: propId,
       proposer: myHandle,
       proposerUserId: authUser.id,
+      proposerAvatar: myAvatarUrl || undefined,
       note: cleanNote,
       itemIds: pickedIds,
       itemsSnapshot: snapshot,
-      likes: 1,
+      likedUserIds: [],
+      replies: [],
+      likes: 0,
       createdAt: '방금 전',
     };
 
@@ -1949,26 +2093,124 @@ export default function AuraFitClient() {
     showToast(`${targetUser.handle} 님에게 코디 제안을 보냈습니다!`);
   };
 
-  const handleLikeProposal = async (targetUserId: string, prop: Proposal) => {
-    const nextLikes = (prop.likes || 0) + 1;
-    if (authUser && supabaseClient && !prop.id.startsWith('prop_')) {
-      await supabaseClient
-        .from('outfit_proposals')
-        .update({ likes: nextLikes })
-        .eq('id', prop.id);
+  const handleToggleLikeProposal = async (
+    targetUserId: string,
+    prop: Proposal
+  ) => {
+    if (!authUser) {
+      setAuthModalOpen(true);
+      return;
     }
+    if (likingProposalSetRef.current.has(prop.id)) return;
+    likingProposalSetRef.current.add(prop.id);
+
+    const alreadyLiked = prop.likedUserIds.includes(authUser.id);
+    const nextSet = new Set(prop.likedUserIds);
+    if (alreadyLiked) {
+      nextSet.delete(authUser.id);
+    } else {
+      nextSet.add(authUser.id);
+    }
+    const nextLikedIds = Array.from(nextSet);
+
+    const updateList = (list: Proposal[]) =>
+      list.map((p) =>
+        p.id === prop.id
+          ? { ...p, likedUserIds: nextLikedIds, likes: nextLikedIds.length }
+          : p
+      );
+
     setCommunityUsers((prev) =>
       prev.map((u) =>
-        u.id === targetUserId
+        u.id === targetUserId || (targetUserId === 'me' && u.id === 'me')
+          ? { ...u, proposals: updateList(u.proposals) }
+          : u
+      )
+    );
+
+    try {
+      await persistProposalEnvelope(
+        prop.id,
+        prop.itemsSnapshot || [],
+        nextLikedIds,
+        prop.replies,
+        prop.proposerAvatar
+      );
+    } finally {
+      likingProposalSetRef.current.delete(prop.id);
+    }
+  };
+
+  const handleAddProposalReply = async (
+    targetUserId: string,
+    prop: Proposal,
+    replyText: string
+  ) => {
+    if (!authUser) {
+      setAuthModalOpen(true);
+      return;
+    }
+    const newReply: ProposalReply = {
+      id: `prep_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      userId: authUser.id,
+      authorHandle: myHandle,
+      authorAvatar: myAvatarUrl || undefined,
+      body: replyText,
+      createdAt: '방금 전',
+    };
+    const nextReplies = [...prop.replies, newReply];
+
+    setCommunityUsers((prev) =>
+      prev.map((u) =>
+        u.id === targetUserId || (targetUserId === 'me' && u.id === 'me')
           ? {
               ...u,
               proposals: u.proposals.map((p) =>
-                p.id === prop.id ? { ...p, likes: nextLikes } : p
+                p.id === prop.id ? { ...p, replies: nextReplies } : p
               ),
             }
           : u
       )
     );
+
+    await persistProposalEnvelope(
+      prop.id,
+      prop.itemsSnapshot || [],
+      prop.likedUserIds,
+      nextReplies,
+      prop.proposerAvatar
+    );
+  };
+
+  const handleDeleteProposalReply = async (
+    targetUserId: string,
+    prop: Proposal,
+    reply: ProposalReply
+  ) => {
+    if (!authUser || reply.userId !== authUser.id) return;
+    const nextReplies = prop.replies.filter((r) => r.id !== reply.id);
+
+    setCommunityUsers((prev) =>
+      prev.map((u) =>
+        u.id === targetUserId || (targetUserId === 'me' && u.id === 'me')
+          ? {
+              ...u,
+              proposals: u.proposals.map((p) =>
+                p.id === prop.id ? { ...p, replies: nextReplies } : p
+              ),
+            }
+          : u
+      )
+    );
+
+    await persistProposalEnvelope(
+      prop.id,
+      prop.itemsSnapshot || [],
+      prop.likedUserIds,
+      nextReplies,
+      prop.proposerAvatar
+    );
+    showToast('답글이 삭제되었습니다.');
   };
 
   const handleAdoptProposalToSaved = async (prop: Proposal) => {
@@ -2038,63 +2280,7 @@ export default function AuraFitClient() {
     }
   };
 
-  const copySocialSql = async () => {
-    try {
-      await navigator.clipboard.writeText(STEP6_SOCIAL_SQL);
-    } catch {
-      const t = document.createElement('textarea');
-      t.value = STEP6_SOCIAL_SQL;
-      document.body.appendChild(t);
-      t.select();
-      document.execCommand('copy');
-      document.body.removeChild(t);
-    }
-    showToast('소셜 업데이트 SQL이 복사되었습니다! Supabase SQL Editor에서 실행해 주세요.');
-  };
-
-  const exportBackup = () => {
-    const blob = new Blob(
-      [
-        JSON.stringify(
-          {
-            wardrobe,
-            savedLooks,
-            stylePosts,
-            exportedAt: new Date().toISOString(),
-          },
-          null,
-          2
-        ),
-      ],
-      { type: 'application/json' }
-    );
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `873oc_backup_${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const importBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const r = new FileReader();
-    r.onload = (ev) => {
-      try {
-        const parsed = JSON.parse(String(ev.target?.result || '{}'));
-        if (Array.isArray(parsed.wardrobe)) setWardrobe(parsed.wardrobe);
-        if (Array.isArray(parsed.savedLooks)) setSavedLooks(parsed.savedLooks);
-        setApiModalOpen(false);
-        showToast('백업 데이터가 복원되었습니다.');
-      } catch {
-        showToast('유효하지 않은 백업 파일입니다.');
-      }
-    };
-    r.readAsText(file);
-  };
-
-  // 유저 ID -> 핸들 맵
+  // 유저 ID -> 핸들 & 프로필 사진 맵
   const handleByUserId = useMemo(() => {
     const map = new Map<string, string>();
     if (authUser) map.set(authUser.id, myHandle);
@@ -2107,6 +2293,20 @@ export default function AuraFitClient() {
     return map;
   }, [authUser, myHandle, communityUsers, stylePosts]);
 
+  const avatarByUserId = useMemo(() => {
+    const map = new Map<string, string>();
+    if (authUser && myAvatarUrl) map.set(authUser.id, myAvatarUrl);
+    communityUsers.forEach((u) => {
+      if (u.id !== 'me' && u.avatarUrl) map.set(u.id, u.avatarUrl);
+    });
+    stylePosts.forEach((p) => {
+      if (p.authorAvatar && !map.has(p.userId)) {
+        map.set(p.userId, p.authorAvatar);
+      }
+    });
+    return map;
+  }, [authUser, myAvatarUrl, communityUsers, stylePosts]);
+
   const myUserId = authUser?.id ?? null;
 
   const myFollowerUsers = useMemo(() => {
@@ -2116,8 +2316,9 @@ export default function AuraFitClient() {
       .map((f) => ({
         id: f.followerId,
         handle: handleByUserId.get(f.followerId) || '@873oc_user',
+        avatarUrl: avatarByUserId.get(f.followerId),
       }));
-  }, [followEdges, myUserId, handleByUserId]);
+  }, [followEdges, myUserId, handleByUserId, avatarByUserId]);
 
   const myFollowingUsers = useMemo(() => {
     if (!myUserId) return [];
@@ -2126,21 +2327,23 @@ export default function AuraFitClient() {
       .map((f) => ({
         id: f.followingId,
         handle: handleByUserId.get(f.followingId) || '@873oc_user',
+        avatarUrl: avatarByUserId.get(f.followingId),
       }));
-  }, [followEdges, myUserId, handleByUserId]);
+  }, [followEdges, myUserId, handleByUserId, avatarByUserId]);
 
   const myProfileObject: CommunityUser = useMemo(() => {
     const meComm = communityUsers.find((u) => u.id === 'me');
     return {
       id: 'me',
       handle: myHandle,
+      avatarUrl: myAvatarUrl,
       bio: myBio,
       isPublic: true,
       isLiveCloudUser: Boolean(authUser),
       closet: wardrobe,
       proposals: meComm?.proposals || [],
     };
-  }, [communityUsers, myHandle, myBio, authUser, wardrobe]);
+  }, [communityUsers, myHandle, myAvatarUrl, myBio, authUser, wardrobe]);
 
   const viewingProfileUser: CommunityUser | null = useMemo(() => {
     if (!viewingUserId) return null;
@@ -2149,12 +2352,13 @@ export default function AuraFitClient() {
     return {
       id: viewingUserId,
       handle: handleByUserId.get(viewingUserId) || '@873oc_user',
+      avatarUrl: avatarByUserId.get(viewingUserId) || '',
       bio: '옷장 아이템을 터치해 어울리는 코디를 제안해 주세요!',
       isPublic: true,
       closet: [],
       proposals: [],
     };
-  }, [viewingUserId, communityUsers, handleByUserId]);
+  }, [viewingUserId, communityUsers, handleByUserId, avatarByUserId]);
 
   const otherFollowerUsers = useMemo(() => {
     if (!viewingUserId) return [];
@@ -2163,8 +2367,9 @@ export default function AuraFitClient() {
       .map((f) => ({
         id: f.followerId,
         handle: handleByUserId.get(f.followerId) || '@873oc_user',
+        avatarUrl: avatarByUserId.get(f.followerId),
       }));
-  }, [followEdges, viewingUserId, handleByUserId]);
+  }, [followEdges, viewingUserId, handleByUserId, avatarByUserId]);
 
   const otherFollowingUsers = useMemo(() => {
     if (!viewingUserId) return [];
@@ -2173,12 +2378,13 @@ export default function AuraFitClient() {
       .map((f) => ({
         id: f.followingId,
         handle: handleByUserId.get(f.followingId) || '@873oc_user',
+        avatarUrl: avatarByUserId.get(f.followingId),
       }));
-  }, [followEdges, viewingUserId, handleByUserId]);
+  }, [followEdges, viewingUserId, handleByUserId, avatarByUserId]);
 
   return (
     <div className="min-h-screen flex flex-col bg-white text-zinc-950">
-      {/* HYPEBEAST × KREAM 감성 초미니멀 상단 헤더 */}
+      {/* HYPEBEAST × KREAM 초미니멀 헤더 (시스템 설정 버튼 완전 제거 · 프로필 사진 표시) */}
       <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-[#F2F2F4]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <button
@@ -2189,7 +2395,6 @@ export default function AuraFitClient() {
             873oc
           </button>
 
-          {/* KREAM 스타일 중앙·우측 심플 네비게이션 (HOME · STYLE · STUDIO · MY) */}
           <nav className="flex items-center gap-5 sm:gap-8 h-full">
             {(
               [
@@ -2219,7 +2424,6 @@ export default function AuraFitClient() {
             })}
           </nav>
 
-          {/* 우측 미니멀 액션 */}
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
@@ -2233,25 +2437,21 @@ export default function AuraFitClient() {
             <button
               type="button"
               onClick={() => setAuthModalOpen(true)}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition cursor-pointer ${
+              className={`px-3 py-1.5 rounded-full text-xs font-bold inline-flex items-center gap-1.5 transition cursor-pointer ${
                 authUser
                   ? 'bg-[#F4F4F5] text-zinc-900 hover:bg-zinc-200'
                   : 'bg-zinc-950 text-white hover:bg-zinc-800'
               }`}
             >
-              {authUser ? myHandle : '로그인'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setCfgForm(apiConfig);
-                setApiModalOpen(true);
-              }}
-              aria-label="설정"
-              className="w-8 h-8 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 text-zinc-700 flex items-center justify-center transition cursor-pointer"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
+              {authUser && myAvatarUrl && (
+                <img
+                  referrerPolicy="no-referrer"
+                  src={myAvatarUrl}
+                  alt={myHandle}
+                  className="w-4 h-4 rounded-full object-cover bg-white"
+                />
+              )}
+              <span>{authUser ? myHandle : '로그인'}</span>
             </button>
           </div>
         </div>
@@ -2286,17 +2486,18 @@ export default function AuraFitClient() {
             posts={stylePosts}
             myUserId={myUserId}
             myHandle={myHandle}
+            myAvatarUrl={myAvatarUrl}
             myWardrobe={wardrobe}
             followingIds={myFollowingUsers.map((u) => u.id)}
             communityUsers={communityUsers}
-            needsSocialSql={needsSocialSql}
-            onCopySocialSql={copySocialSql}
+            avatarByUserId={avatarByUserId}
             onOpenAuth={() => setAuthModalOpen(true)}
             onOpenClothUpload={() => setUploadModalOpen(true)}
             onVisitUserProfile={handleVisitUserProfile}
             onToggleFollow={handleToggleFollow}
             onToggleLikePost={handleToggleLikePost}
             onSubmitComment={handleSubmitComment}
+            onDeleteComment={handleDeleteComment}
             onDeletePost={handleDeleteStylePost}
             onCreateStylePost={handleCreateStylePost}
           />
@@ -2338,17 +2539,12 @@ export default function AuraFitClient() {
             isGeneratingLookbook={isGeneratingLookbook}
             stylistResult={stylistResult}
             lookbookStatusHint={lookbookStatusHint}
-            lookbookMissingKey={lookbookMissingKey}
             isSavingLookbook={isSavingLookbook}
             onGenerateAIOutfit={generateAIOutfit}
             onShootLookbookPhoto={() => generateLookbookPhoto()}
             onSaveLookbook={handleSaveCurrentLook}
             onDownloadImage={downloadImage}
             onZoomImage={setZoomImageUrl}
-            onOpenApiModal={() => {
-              setCfgForm(apiConfig);
-              setApiModalOpen(true);
-            }}
             onOpenClothUpload={() => setUploadModalOpen(true)}
           />
         )}
@@ -2364,6 +2560,7 @@ export default function AuraFitClient() {
             )}
             followerUsers={myFollowerUsers}
             followingUsers={myFollowingUsers}
+            avatarByUserId={avatarByUserId}
             isFollowingTarget={false}
             mySubTab={mySubTab}
             onChangeMySubTab={setMySubTab}
@@ -2385,7 +2582,9 @@ export default function AuraFitClient() {
             onToggleFollowTarget={() => {}}
             onVisitUserProfile={handleVisitUserProfile}
             onSubmitProposalToUser={handleSubmitProposalToUser}
-            onLikeProposal={handleLikeProposal}
+            onToggleLikeProposal={handleToggleLikeProposal}
+            onAddProposalReply={handleAddProposalReply}
+            onDeleteProposalReply={handleDeleteProposalReply}
             onAdoptProposalToSaved={handleAdoptProposalToSaved}
           />
         )}
@@ -2401,6 +2600,7 @@ export default function AuraFitClient() {
             )}
             followerUsers={otherFollowerUsers}
             followingUsers={otherFollowingUsers}
+            avatarByUserId={avatarByUserId}
             isFollowingTarget={Boolean(
               myUserId &&
                 followEdges.some(
@@ -2435,13 +2635,15 @@ export default function AuraFitClient() {
             }
             onVisitUserProfile={handleVisitUserProfile}
             onSubmitProposalToUser={handleSubmitProposalToUser}
-            onLikeProposal={handleLikeProposal}
+            onToggleLikeProposal={handleToggleLikeProposal}
+            onAddProposalReply={handleAddProposalReply}
+            onDeleteProposalReply={handleDeleteProposalReply}
             onAdoptProposalToSaved={handleAdoptProposalToSaved}
           />
         )}
       </main>
 
-      {/* 심플 무테두리 푸터 */}
+      {/* 심플 푸터 */}
       <footer className="py-10 px-4 sm:px-6 text-xs text-zinc-400 border-t border-[#F4F4F5]">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="font-semibold text-zinc-500">
@@ -2458,12 +2660,13 @@ export default function AuraFitClient() {
         </div>
       </footer>
 
-      {/* 공통 모달 묶음 */}
+      {/* 공통 모달 */}
       <AppModals
         authModalOpen={authModalOpen}
         onCloseAuthModal={() => setAuthModalOpen(false)}
         authUser={authUser}
         myHandle={myHandle}
+        myAvatarUrl={myAvatarUrl}
         authMode={authMode}
         onChangeAuthMode={setAuthMode}
         authEmail={authEmail}
@@ -2535,30 +2738,11 @@ export default function AuraFitClient() {
         onUploadExtraAngleInEdit={handleUploadExtraAngleInEdit}
         isSavingClothEdit={isSavingClothEdit}
         onSaveClothEdit={handleSaveClothEdit}
-        apiModalOpen={apiModalOpen}
-        onCloseApiModal={() => setApiModalOpen(false)}
-        cfgForm={cfgForm}
-        onChangeCfgForm={setCfgForm}
-        onSaveApiConfig={(e) => {
-          e.preventDefault();
-          setApiConfig({
-            geminiKey: cfgForm.geminiKey.trim(),
-            fashnKey: cfgForm.fashnKey.trim(),
-            supabaseUrl: cfgForm.supabaseUrl.trim(),
-            supabaseKey: cfgForm.supabaseKey.trim(),
-          });
-          setApiModalOpen(false);
-          showToast('설정이 저장되었습니다.');
-        }}
-        onCopySocialSql={copySocialSql}
-        onExportBackup={exportBackup}
-        onImportBackup={importBackup}
         zoomImageUrl={zoomImageUrl}
         onCloseZoomImage={() => setZoomImageUrl('')}
         onDownloadImage={downloadImage}
       />
 
-      {/* 미니멀 토스트 */}
       {toasts.length > 0 && (
         <div className="fixed bottom-5 right-5 z-50 space-y-2 pointer-events-none">
           {toasts.map((t) => (

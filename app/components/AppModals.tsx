@@ -4,15 +4,12 @@ import React from 'react';
 import { type User } from '@supabase/supabase-js';
 import {
   Camera,
-  Copy,
   Download,
   Link2,
   LogOut,
-  Upload,
   X,
 } from 'lucide-react';
 import {
-  type ApiConfig,
   type CategoryType,
   type ClothItem,
   type ClothStatus,
@@ -28,6 +25,7 @@ interface AppModalsProps {
   onCloseAuthModal: () => void;
   authUser: User | null;
   myHandle: string;
+  myAvatarUrl: string;
   authMode: 'login' | 'signup';
   onChangeAuthMode: (m: 'login' | 'signup') => void;
   authEmail: string;
@@ -99,17 +97,7 @@ interface AppModalsProps {
   isSavingClothEdit: boolean;
   onSaveClothEdit: (e: React.FormEvent) => void;
 
-  // 4. Settings & SQL Modal
-  apiModalOpen: boolean;
-  onCloseApiModal: () => void;
-  cfgForm: ApiConfig;
-  onChangeCfgForm: (next: ApiConfig) => void;
-  onSaveApiConfig: (e: React.FormEvent) => void;
-  onCopySocialSql: () => void;
-  onExportBackup: () => void;
-  onImportBackup: (e: React.ChangeEvent<HTMLInputElement>) => void;
-
-  // 5. Lightbox
+  // 4. Lightbox
   zoomImageUrl: string;
   onCloseZoomImage: () => void;
   onDownloadImage: (url: string, title: string) => void;
@@ -120,6 +108,7 @@ export default function AppModals({
   onCloseAuthModal,
   authUser,
   myHandle,
+  myAvatarUrl,
   authMode,
   onChangeAuthMode,
   authEmail,
@@ -189,30 +178,21 @@ export default function AppModals({
   isSavingClothEdit,
   onSaveClothEdit,
 
-  apiModalOpen,
-  onCloseApiModal,
-  cfgForm,
-  onChangeCfgForm,
-  onSaveApiConfig,
-  onCopySocialSql,
-  onExportBackup,
-  onImportBackup,
-
   zoomImageUrl,
   onCloseZoomImage,
   onDownloadImage,
 }: AppModalsProps) {
   return (
     <>
-      {/* 1. 로그인 · 회원가입 모달 */}
+      {/* 1. 로그인 · 회원가입 모달 (무색 블러 배경) */}
       {authModalOpen && (
         <div
           onClick={onCloseAuthModal}
-          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-3xl bg-white p-6 sm:p-7 shadow-2xl space-y-5 animate-fade-soft"
+            className="w-full max-w-md rounded-3xl bg-white p-6 sm:p-7 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-5 animate-fade-soft"
           >
             <div className="flex items-center justify-between">
               <div>
@@ -226,7 +206,7 @@ export default function AppModals({
               <button
                 type="button"
                 onClick={onCloseAuthModal}
-                className="w-8 h-8 rounded-full bg-[#F4F4F5] flex items-center justify-center cursor-pointer"
+                className="w-8 h-8 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -234,11 +214,28 @@ export default function AppModals({
 
             {authUser ? (
               <div className="space-y-4">
-                <div className="rounded-2xl bg-[#F7F7F8] p-4 space-y-1">
-                  <p className="text-sm font-extrabold text-zinc-950">
-                    {myHandle}
-                  </p>
-                  <p className="text-xs text-zinc-500">{authUser.email}</p>
+                <div className="rounded-2xl bg-[#F7F7F8] p-4 flex items-center gap-3.5">
+                  {myAvatarUrl ? (
+                    <img
+                      referrerPolicy="no-referrer"
+                      src={myAvatarUrl}
+                      alt={myHandle}
+                      className="w-12 h-12 rounded-full object-cover bg-white shrink-0"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-zinc-950 text-white text-sm font-black flex items-center justify-center shrink-0">
+                      {myHandle.replace(/^@/, '').slice(0, 2).toUpperCase() ||
+                        '87'}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm font-extrabold text-zinc-950 truncate">
+                      {myHandle}
+                    </p>
+                    <p className="text-xs text-zinc-500 truncate">
+                      {authUser.email}
+                    </p>
+                  </div>
                 </div>
 
                 <button
@@ -352,11 +349,11 @@ export default function AppModals({
       {uploadModalOpen && (
         <div
           onClick={onCloseUploadModal}
-          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-7 shadow-2xl space-y-5 animate-fade-soft"
+            className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-7 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-5 animate-fade-soft"
           >
             <div className="flex items-center justify-between">
               <div>
@@ -370,7 +367,7 @@ export default function AppModals({
               <button
                 type="button"
                 onClick={onCloseUploadModal}
-                className="w-8 h-8 rounded-full bg-[#F4F4F5] flex items-center justify-center cursor-pointer"
+                className="w-8 h-8 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -687,11 +684,11 @@ export default function AppModals({
       {editingCloth && (
         <div
           onClick={onCloseEditCloth}
-          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-7 shadow-2xl space-y-5 animate-fade-soft"
+            className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-7 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-5 animate-fade-soft"
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-extrabold text-zinc-950">
@@ -700,7 +697,7 @@ export default function AppModals({
               <button
                 type="button"
                 onClick={onCloseEditCloth}
-                className="w-8 h-8 rounded-full bg-[#F4F4F5] flex items-center justify-center cursor-pointer"
+                className="w-8 h-8 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -889,102 +886,15 @@ export default function AppModals({
         </div>
       )}
 
-      {/* 4. 클라우드 소셜 SQL · API · 백업 설정 모달 */}
-      {apiModalOpen && (
-        <div
-          onClick={onCloseApiModal}
-          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-7 shadow-2xl space-y-5 animate-fade-soft"
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-extrabold text-zinc-950">
-                  873oc 시스템 설정
-                </h3>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  소셜 테이블 SQL 복사 · API 키 · 옷장 데이터 백업
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={onCloseApiModal}
-                className="w-8 h-8 rounded-full bg-[#F4F4F5] flex items-center justify-center cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="rounded-2xl bg-[#F7F7F8] p-4 space-y-2.5">
-              <p className="text-xs font-extrabold text-zinc-950">
-                소셜 업데이트 SQL (STYLE 피드 · 옷장 태그 · 팔로우 · 전체공개)
-              </p>
-              <p className="text-[11px] text-zinc-500 leading-relaxed">
-                아래 버튼으로 SQL을 복사한 뒤 Supabase SQL Editor에 붙여넣고 Run을 한 번만 눌러주시면 모든 유저 간 피드와 팔로우가 실시간 연동됩니다.
-              </p>
-              <button
-                type="button"
-                onClick={onCopySocialSql}
-                className="px-4 py-2 rounded-full bg-zinc-950 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <Copy className="w-3.5 h-3.5" /> 소셜 테이블 SQL 복사하기
-              </button>
-            </div>
-
-            <form onSubmit={onSaveApiConfig} className="space-y-3">
-              <p className="text-xs font-extrabold text-zinc-900">
-                선택 설정: 브라우저 개인 API 키 (서버 환경변수 미설정 시 보조용)
-              </p>
-              <input
-                type="password"
-                value={cfgForm.geminiKey}
-                onChange={(e) =>
-                  onChangeCfgForm({ ...cfgForm, geminiKey: e.target.value })
-                }
-                placeholder="Gemini API Key (Vercel 환경변수 등록 시 비워두세요)"
-                className="w-full px-4 py-2.5 rounded-2xl bg-[#F4F4F5] text-xs text-zinc-900 focus:outline-none"
-              />
-              <button
-                type="submit"
-                className="w-full py-3 rounded-full bg-zinc-950 text-white text-xs font-bold cursor-pointer"
-              >
-                설정 저장
-              </button>
-            </form>
-
-            <div className="pt-3 border-t border-[#F1F1F3] flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={onExportBackup}
-                className="flex-1 py-2.5 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 text-xs font-bold text-zinc-800 inline-flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" /> JSON 백업
-              </button>
-              <label className="flex-1 py-2.5 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 text-xs font-bold text-zinc-800 inline-flex items-center justify-center gap-1.5 cursor-pointer">
-                <Upload className="w-3.5 h-3.5" /> JSON 복원
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={onImportBackup}
-                  className="hidden"
-                />
-              </label>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 5. 고해상도 이미지 확대 뷰어 (Lightbox) */}
+      {/* 4. 고해상도 이미지 확대 뷰어 (무색 투명 블러 배경) */}
       {zoomImageUrl && (
         <div
           onClick={onCloseZoomImage}
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-white/35 backdrop-blur-md flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-3xl bg-white p-3.5 shadow-2xl space-y-3 animate-fade-soft"
+            className="w-full max-w-md rounded-3xl bg-white p-3.5 shadow-[0_24px_70px_rgba(0,0,0,0.16)] ring-1 ring-black/5 space-y-3 animate-fade-soft"
           >
             <div className="flex items-center justify-between px-1">
               <span className="text-xs font-extrabold text-zinc-950">
@@ -1001,7 +911,7 @@ export default function AppModals({
                 <button
                   type="button"
                   onClick={onCloseZoomImage}
-                  className="w-7 h-7 rounded-full bg-[#F4F4F5] flex items-center justify-center cursor-pointer"
+                  className="w-7 h-7 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 flex items-center justify-center cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>

@@ -340,11 +340,11 @@ export default function NewsletterHomeSection({
       {activeArticle && (
         <div
           onClick={onCloseArticle}
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-8 shadow-2xl space-y-6 animate-fade-soft"
+            className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-8 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-6 animate-fade-soft"
           >
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-xs font-semibold text-zinc-400">
