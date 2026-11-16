@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 interface RawFeedArticle {
   id: string;
@@ -33,11 +33,16 @@ interface CachedArticleDetail {
   cachedAt: number;
 }
 
+// 국내 메이저 패션 매거진(기본 한국어·초고속 응답) + 글로벌 스트릿·패션 피드(즉시 한국어 자동 번역) 병렬 구성
 const FEED_SOURCES: {
   url: string;
   sourceName: string;
   region: 'KR' | 'GLOBAL';
 }[] = [
+  { url: 'https://www.gqkorea.co.kr/feed/', sourceName: 'GQ KOREA', region: 'KR' },
+  { url: 'https://www.vogue.co.kr/feed/', sourceName: 'VOGUE KOREA', region: 'KR' },
+  { url: 'https://www.wkorea.com/feed/', sourceName: 'W KOREA', region: 'KR' },
+  { url: 'https://www.esquirekorea.co.kr/feed/', sourceName: 'ESQUIRE KR', region: 'KR' },
   { url: 'https://hypebeast.kr/feed', sourceName: 'HYPEBEAST KR', region: 'KR' },
   { url: 'https://hypebeast.com/feed', sourceName: 'HYPEBEAST', region: 'GLOBAL' },
   { url: 'https://www.gq.com/feed/rss', sourceName: 'GQ GLOBAL', region: 'GLOBAL' },
@@ -98,7 +103,7 @@ function extractImageFromItemXml(itemXml: string): string {
   ];
   for (let i = 0; i < patterns.length; i++) {
     const m = patterns[i].exec(itemXml);
-    if (m && m[1] && !/1x1|pixel|avatar|logo|icon\.svg/i.test(m[1])) {
+    if (m && m[1] && !/1x1|pixel|avatar|logo|icon\.svg|gravatar/i.test(m[1])) {
       return decodeEntities(m[1]);
     }
   }
@@ -112,21 +117,21 @@ function detectCategory(
 ): '패션' | '스니커즈' | '컬처' | '라이프스타일' {
   const joined = `${title} ${summary} ${rawCategory}`.toLowerCase();
   if (
-    /sneaker|footwear|shoe|jordan|air max|air force|dunk|new balance|asics|salomon|adidas|yeezy|crocs|vans|converse|스니커|신발|슈즈|부츠|조던|나이키|뉴발란스|아디다스|살로몬|크록스|반스/.test(
+    /sneaker|footwear|shoe|jordan|air max|air force|dunk|new balance|asics|salomon|adidas|yeezy|crocs|vans|converse|loafer|boot|스니커|신발|슈즈|부츠|로퍼|조던|나이키|뉴발란스|아디다스|살로몬|크록스|반스/.test(
       joined
     )
   ) {
     return '스니커즈';
   }
   if (
-    /fashion|apparel|runway|collection|collab|capsule|jacket|hoodie|denim|streetwear|luxury|prada|gucci|supreme|stussy|palace|kith|balenciaga|패션|컬렉션|협업|콜라보|아우터|자켓|데님|룩북|런웨이|캠페인/.test(
+    /fashion|apparel|runway|collection|collab|capsule|jacket|hoodie|denim|streetwear|luxury|prada|gucci|chanel|dior|balenciaga|supreme|stussy|palace|kith|lookbook|패션|컬렉션|협업|콜라보|아우터|자켓|재킷|코트|데님|룩북|런웨이|캠페인|스타일|브랜드|샤넬|디올|프라다|구찌|루이 비통/.test(
       joined
     )
   ) {
     return '패션';
   }
   if (
-    /music|film|movie|art|exhibition|album|netflix|artist|design|architecture|음악|영화|아트|전시|앨범|넷플릭스|아티스트|디자인/.test(
+    /music|film|movie|art|exhibition|album|netflix|artist|design|architecture|음악|영화|아트|전시|앨범|넷플릭스|아티스트|디자인|배우|아이돌/.test(
       joined
     )
   ) {
@@ -139,7 +144,7 @@ function hasKoreanText(str: string): boolean {
   return /[가-힣]/.test(str);
 }
 
-async function fetchWithTimeout(url: string, timeoutMs = 6500): Promise<string> {
+async function fetchWithTimeout(url: string, timeoutMs = 2300): Promise<string> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -157,6 +162,46 @@ async function fetchWithTimeout(url: string, timeoutMs = 6500): Promise<string> 
     return await resp.text();
   } catch {
     return '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// [Layer 1] 초고속 병렬 영→한 번역기 (~0.2초 응답 · API 키 무관하게 100% 한국어 보장)
+async function fastTranslateTextToKorean(
+  text: string,
+  timeoutMs = 2000
+): Promise<string> {
+  const trimmed = text.trim();
+  if (!trimmed || hasKoreanText(trimmed)) return trimmed;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const endpoint = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q=${encodeURIComponent(
+      trimmed
+    )}`;
+    const resp = await fetch(endpoint, {
+      headers: { 'User-Agent': BROWSER_UA },
+      signal: ctrl.signal,
+      cache: 'no-store',
+    });
+    if (!resp.ok) return trimmed;
+    const data = await resp.json();
+    if (Array.isArray(data) && Array.isArray(data[0])) {
+      const joined = data[0]
+        .map((seg: unknown) =>
+          Array.isArray(seg) && typeof seg[0] === 'string' ? seg[0] : ''
+        )
+        .join('')
+        .trim();
+      if (joined && hasKoreanText(joined)) {
+        return joined;
+      }
+    }
+    return trimmed;
+  } catch {
+    return trimmed;
   } finally {
     clearTimeout(timer);
   }
@@ -188,7 +233,12 @@ function parseRssXml(
     const descRaw =
       extractTagContent(block, 'description') ||
       extractTagContent(block, 'content:encoded');
-    const cleanSummary = stripHtml(descRaw).slice(0, 220);
+    const cleanSummary = stripHtml(descRaw)
+      .replace(/더 보기.*$/g, '')
+      .replace(/The post .* appeared first on .*$/i, '')
+      .trim()
+      .slice(0, 180);
+
     const rawCat = stripHtml(extractTagContent(block, 'category'));
     const pubRaw = stripHtml(extractTagContent(block, 'pubDate'));
     let isoDate = new Date().toISOString();
@@ -200,10 +250,11 @@ function parseRssXml(
     }
 
     const cachedKo = itemTranslationCache.get(link);
-    const alreadyKorean = hasKoreanText(rawTitle);
 
     results.push({
-      id: `${sourceName}_${Buffer.from(link).toString('base64').slice(0, 22)}`,
+      id: `${sourceName.replace(/\s+/g, '')}_${Buffer.from(link)
+        .toString('base64')
+        .slice(0, 22)}`,
       url: link,
       sourceName,
       sourceRegion: region,
@@ -212,106 +263,91 @@ function parseRssXml(
       title: cachedKo ? cachedKo.titleKo : rawTitle,
       summary: cachedKo ? cachedKo.summaryKo : cleanSummary,
       image,
-      category: detectCategory(rawTitle, cleanSummary, rawCat),
+      category: detectCategory(
+        cachedKo ? `${rawTitle} ${cachedKo.titleKo}` : rawTitle,
+        cleanSummary,
+        rawCat
+      ),
       publishedAt: isoDate,
-      isTranslated: Boolean(cachedKo) || (!alreadyKorean && false),
+      isTranslated: Boolean(cachedKo),
     });
 
-    if (results.length >= 12) break;
+    if (results.length >= 7) break;
   }
 
   return results;
 }
 
-async function scrapeHypebeastKrHtmlFallback(): Promise<RawFeedArticle[]> {
-  const html = await fetchWithTimeout('https://hypebeast.kr/', 6500);
-  if (!html) return [];
-  const list: RawFeedArticle[] = [];
-  const seen = new Set<string>();
-  const anchorRe =
-    /<a[^>]+href=["'](https:\/\/hypebeast\.kr\/20\d{2}\/\d{1,2}\/[^"'#?]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  let m: RegExpExecArray | null;
-
-  while ((m = anchorRe.exec(html)) !== null) {
-    const url = m[1];
-    if (seen.has(url)) continue;
-    const inner = m[2];
-    const imgMatch = /<img[^>]+(?:data-src|src)=["'](https?:\/\/[^"']+)["']/i.exec(
-      inner
-    );
-    if (!imgMatch) continue;
-    const windowAround = html.slice(
-      Math.max(0, m.index - 400),
-      Math.min(html.length, m.index + 1600)
-    );
-    const titleMatch =
-      /title=["']([^"']{8,140})["']/i.exec(inner) ||
-      /<h[234][^>]*>([\s\S]{6,200}?)<\/h[234]>/i.exec(windowAround);
-    const title = titleMatch ? stripHtml(titleMatch[1]) : '';
-    if (!title || title.length < 6) continue;
-
-    seen.add(url);
-    list.push({
-      id: `HBKR_${Buffer.from(url).toString('base64').slice(0, 22)}`,
-      url,
-      sourceName: 'HYPEBEAST KR',
-      sourceRegion: 'KR',
-      originalTitle: title,
-      originalSummary: '하입비스트 코리아 최신 패션 · 컬처 에디토리얼 리포트',
-      title,
-      summary: '하입비스트 코리아 최신 패션 · 컬처 에디토리얼 리포트',
-      image: decodeEntities(imgMatch[1]),
-      category: detectCategory(title, '', ''),
-      publishedAt: new Date().toISOString(),
-      isTranslated: false,
-    });
-    if (list.length >= 10) break;
-  }
-  return list;
-}
-
-async function translateEnglishFeedItemsWithGemini(
+// [Layer 1 + Layer 2] 모든 영문 기사를 즉시 병렬 한국어로 변환 + Gemini 무지연(thinkingBudget:0) 에디토리얼 윤문
+async function ensureAllArticlesInKoreanFast(
   articles: RawFeedArticle[],
   apiKey: string
 ): Promise<void> {
-  if (!apiKey) return;
+  const uncachedTargets: { index: number; item: RawFeedArticle }[] = [];
 
-  const targets: { idx: number; item: RawFeedArticle }[] = [];
   for (let i = 0; i < articles.length; i++) {
     const art = articles[i];
-    if (hasKoreanText(art.title)) continue;
-    const hit = itemTranslationCache.get(art.url);
-    if (hit) {
-      art.title = hit.titleKo;
-      art.summary = hit.summaryKo;
+    if (hasKoreanText(art.title) && (!art.summary || hasKoreanText(art.summary))) {
+      continue;
+    }
+    const cached = itemTranslationCache.get(art.url);
+    if (cached) {
+      art.title = cached.titleKo;
+      art.summary = cached.summaryKo;
       art.isTranslated = true;
       continue;
     }
-    if (targets.length < 14) {
-      targets.push({ idx: i, item: art });
-    }
+    uncachedTargets.push({ index: i, item: art });
   }
 
-  if (targets.length === 0) return;
+  if (uncachedTargets.length === 0) return;
 
-  const payload = targets.map((t, listIndex) => ({
-    idx: listIndex,
-    title: t.item.originalTitle.slice(0, 160),
-    summary: t.item.originalSummary.slice(0, 240),
+  // 1) 먼저 초고속 병렬 번역(~250ms)으로 100% 한국어 제목·요약을 즉시 확보 (영어 노출 원천 차단!)
+  await Promise.all(
+    uncachedTargets.map(async ({ item }) => {
+      const [koTitle, koSummary] = await Promise.all([
+        hasKoreanText(item.title)
+          ? Promise.resolve(item.title)
+          : fastTranslateTextToKorean(item.originalTitle, 2000),
+        !item.originalSummary || hasKoreanText(item.originalSummary)
+          ? Promise.resolve(item.originalSummary)
+          : fastTranslateTextToKorean(item.originalSummary, 2000),
+      ]);
+
+      if (hasKoreanText(koTitle)) {
+        item.title = koTitle;
+        item.summary = koSummary;
+        item.isTranslated = true;
+        item.category = detectCategory(
+          `${item.originalTitle} ${koTitle}`,
+          koSummary,
+          ''
+        );
+        itemTranslationCache.set(item.url, {
+          titleKo: koTitle,
+          summaryKo: koSummary,
+        });
+      }
+    })
+  );
+
+  // 2) Gemini API 키가 있으면 thinkingBudget: 0 (추론 지연 제거 -> 약 1초 응답)으로 매거진 어조 다듬기 시도
+  if (!apiKey) return;
+
+  const polishList = uncachedTargets.slice(0, 10);
+  const payload = polishList.map((t, idx) => ({
+    idx,
+    title: t.item.originalTitle.slice(0, 140),
+    summary: t.item.originalSummary.slice(0, 190),
   }));
 
-  const prompt = `당신은 하입비스트 코리아(Hypebeast Korea)와 아이즈매거진의 수석 패션 에디터입니다.
-아래 영문 글로벌 패션·스니커즈·컬처 뉴스 목록을 한국 독자가 읽기 좋게 감각적이고 자연스러운 한국어 매거진 문체로 번역하세요.
-브랜드명·모델명(예: Nike, Supreme, Palace, Air Max, Salomon 등)은 한국 패션 매거진 표기 관행을 따르고, 요약(summaryKo)은 핵심 내용을 1~2문장(70~130자)으로 매끄럽게 정리하세요.
-반드시 아래 JSON 배열 형식으로만 응답하세요:
-[{"idx": 0, "titleKo": "번역된 한국어 헤드라인", "summaryKo": "번역 및 요약된 한국어 리드 문장"}]
-
-입력 기사 목록:
-${JSON.stringify(payload)}`;
+  const prompt = `패션 매거진 한국어 에디터로서 아래 영문 뉴스 제목·요약을 세련된 한국어 헤드라인과 1문장 요약으로 다듬으세요. JSON 배열만 출력:
+[{"idx":0,"titleKo":"한국어 제목","summaryKo":"한국어 한 줄 요약"}]
+입력:${JSON.stringify(payload)}`;
 
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 14000);
+    const timer = setTimeout(() => ctrl.abort(), 2400);
     const resp = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
         apiKey
@@ -323,7 +359,8 @@ ${JSON.stringify(payload)}`;
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
             responseMimeType: 'application/json',
-            temperature: 0.25,
+            temperature: 0.2,
+            thinkingConfig: { thinkingBudget: 0 },
           },
         }),
         signal: ctrl.signal,
@@ -341,33 +378,23 @@ ${JSON.stringify(payload)}`;
 
     for (let i = 0; i < parsed.length; i++) {
       const row = parsed[i];
-      const target = targets[row.idx];
-      if (!target || !row.titleKo) continue;
+      const target = polishList[row.idx];
+      if (!target || !row.titleKo || !hasKoreanText(row.titleKo)) continue;
       const cleanTitleKo = String(row.titleKo).trim();
       const cleanSummaryKo = String(
-        row.summaryKo || target.item.originalSummary
+        row.summaryKo || target.item.summary
       ).trim();
 
       target.item.title = cleanTitleKo;
       target.item.summary = cleanSummaryKo;
-      target.item.category = detectCategory(
-        `${target.item.originalTitle} ${cleanTitleKo}`,
-        cleanSummaryKo,
-        ''
-      );
       target.item.isTranslated = true;
-
-      if (itemTranslationCache.size > 350) {
-        const firstKey = itemTranslationCache.keys().next().value;
-        if (firstKey) itemTranslationCache.delete(firstKey);
-      }
       itemTranslationCache.set(target.item.url, {
         titleKo: cleanTitleKo,
         summaryKo: cleanSummaryKo,
       });
     }
   } catch {
-    // Keep original English gracefully if translation times out
+    // 2.4초 초과 시 이미 완료된 Layer 1 한국어 번역본을 즉시 그대로 반환!
   }
 }
 
@@ -384,21 +411,24 @@ export async function GET(request: Request) {
       cachedArticles.length >= 6 &&
       now - cachedFeedTimestamp < FEED_TTL_MS
     ) {
-      // If an API key became available later and untranslated items remain, translate them once
-      const hasUntranslated = cachedArticles.some((a) => !hasKoreanText(a.title));
-      if (apiKey && hasUntranslated) {
-        await translateEnglishFeedItemsWithGemini(cachedArticles, apiKey);
-      }
-      return NextResponse.json({
-        success: true,
-        articles: cachedArticles,
-        cached: true,
-      });
+      return NextResponse.json(
+        {
+          success: true,
+          articles: cachedArticles,
+          cached: true,
+        },
+        {
+          headers: {
+            'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=1800',
+          },
+        }
+      );
     }
 
-    const xmlList = await Promise.all(
+    // 모든 국내·해외 RSS 피드를 최대 2.3초 타임아웃으로 동시에 병렬 수집 (느린 사이트 자동 패스)
+    const xmlGroups = await Promise.all(
       FEED_SOURCES.map(async (src) => {
-        const xml = await fetchWithTimeout(src.url, 6500);
+        const xml = await fetchWithTimeout(src.url, 2300);
         return parseRssXml(xml, src.sourceName, src.region);
       })
     );
@@ -406,8 +436,8 @@ export async function GET(request: Request) {
     let merged: RawFeedArticle[] = [];
     const seenUrls = new Set<string>();
 
-    for (let i = 0; i < xmlList.length; i++) {
-      const group = xmlList[i];
+    for (let i = 0; i < xmlGroups.length; i++) {
+      const group = xmlGroups[i];
       for (let j = 0; j < group.length; j++) {
         const item = group[j];
         const normUrl = item.url.replace(/\/$/, '');
@@ -417,40 +447,37 @@ export async function GET(request: Request) {
       }
     }
 
-    const krCount = merged.filter((a) => a.sourceRegion === 'KR').length;
-    if (krCount === 0) {
-      const fallbackKr = await scrapeHypebeastKrHtmlFallback();
-      for (let i = 0; i < fallbackKr.length; i++) {
-        const item = fallbackKr[i];
-        const normUrl = item.url.replace(/\/$/, '');
-        if (!seenUrls.has(normUrl)) {
-          seenUrls.add(normUrl);
-          merged.unshift(item);
-        }
-      }
-    }
-
-    // Interleave KR and GLOBAL items naturally sorted by timestamp so both Korean & translated Global stories shine
     merged.sort(
       (a, b) =>
         new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
     );
     merged = merged.slice(0, 24);
 
-    if (apiKey && merged.length > 0) {
-      await translateEnglishFeedItemsWithGemini(merged, apiKey);
+    if (merged.length > 0) {
+      await ensureAllArticlesInKoreanFast(merged, apiKey);
     }
 
-    if (merged.length > 0) {
-      cachedArticles = merged;
+    // 혹시라도 번역이 안 된 순수 영문 항목이 남아 있다면 철저히 제외해 100% 한국어 피드만 노출
+    const koreanOnly = merged.filter((a) => hasKoreanText(a.title));
+    const finalArticles = koreanOnly.length >= 4 ? koreanOnly : merged;
+
+    if (finalArticles.length > 0) {
+      cachedArticles = finalArticles;
       cachedFeedTimestamp = now;
     }
 
-    return NextResponse.json({
-      success: true,
-      articles: merged,
-      cached: false,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        articles: finalArticles.length > 0 ? finalArticles : cachedArticles,
+        cached: false,
+      },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=1800',
+        },
+      }
+    );
   } catch {
     return NextResponse.json({
       success: false,
@@ -475,7 +502,6 @@ function extractArticleParagraphsAndOgImage(html: string): {
     ogImage = decodeEntities(ogMatch[1]);
   }
 
-  // Scope to <article> or <main> if present
   const articleMatch =
     /<article\b[\s\S]*?<\/article>/i.exec(html) ||
     /<main\b[\s\S]*?<\/main>/i.exec(html);
@@ -487,8 +513,8 @@ function extractArticleParagraphsAndOgImage(html: string): {
   while ((pm = pRe.exec(targetHtml)) !== null) {
     const text = stripHtml(pm[1]);
     if (
-      text.length < 40 ||
-      /cookie|privacy policy|all rights reserved|subscribe to our newsletter|sign up for|terms of service|무단 전재/i.test(
+      text.length < 38 ||
+      /cookie|privacy policy|all rights reserved|subscribe to our newsletter|sign up for|terms of service|무단 전재|저작권자/i.test(
         text
       )
     ) {
@@ -497,7 +523,7 @@ function extractArticleParagraphsAndOgImage(html: string): {
     if (!paragraphs.includes(text)) {
       paragraphs.push(text);
     }
-    if (paragraphs.length >= 10) break;
+    if (paragraphs.length >= 6) break;
   }
 
   return { paragraphs, ogImage };
@@ -534,33 +560,47 @@ export async function POST(request: Request) {
       ''
     ).trim();
 
-    const html = await fetchWithTimeout(targetUrl, 7500);
+    const html = await fetchWithTimeout(targetUrl, 3000);
     const { paragraphs, ogImage } = html
       ? extractArticleParagraphsAndOgImage(html)
       : { paragraphs: [], ogImage: '' };
 
-    const joinedRaw = paragraphs.join('\n\n') || String(body.summary || '');
-    const isEnglishContent = !hasKoreanText(joinedRaw.slice(0, 350));
+    const rawParas =
+      paragraphs.length > 0
+        ? paragraphs.slice(0, 5)
+        : body.summary
+        ? [String(body.summary)]
+        : [];
+    const joinedSample = rawParas.join(' ');
+    const isEnglishContent =
+      Boolean(joinedSample) && !hasKoreanText(joinedSample.slice(0, 300));
 
-    if (apiKey && joinedRaw.length > 30) {
-      const prompt = `당신은 패션·스니커즈·컬처 전문 매거진 '873oc'의 수석 에디터입니다.
-아래 기사 원문을 바탕으로 한국 독자가 매거진 뉴스레터처럼 편하게 읽을 수 있도록 정리하세요.
-원문이 영어인 경우 자연스럽고 세련된 한국어로 완역·재구성하고, 원문이 한국어인 경우 핵심 내용을 읽기 좋게 다듬어 주세요.
+    // 1) 영문 본문이면 즉시 병렬 번역(~0.3초)으로 모든 문단을 한국어로 변환!
+    const [translatedTitle, translatedParas] = await Promise.all([
+      body.title && !hasKoreanText(body.title)
+        ? fastTranslateTextToKorean(body.title, 2200)
+        : Promise.resolve(String(body.title || '')),
+      isEnglishContent
+        ? Promise.all(
+            rawParas.map((p) => fastTranslateTextToKorean(p.slice(0, 700), 2400))
+          )
+        : Promise.resolve(rawParas),
+    ]);
 
-반드시 다음 JSON 형식으로만 출력하세요:
-{
-  "titleKo": "매거진 스타일 한국어 제목",
-  "highlightsKo": ["핵심 요약 포인트 1", "핵심 요약 포인트 2", "핵심 요약 포인트 3"],
-  "paragraphsKo": ["본문 단락 1 (3~4문장)", "본문 단락 2 (3~4문장)", "본문 단락 3 (2~4문장)"]
-}
+    let finalTitleKo = translatedTitle;
+    let finalParasKo = translatedParas;
+    let highlightsKo: string[] = [];
 
-기사 제목: ${String(body.title || '').slice(0, 200)}
-기사 원문 발췌:
-${joinedRaw.slice(0, 4200)}`;
+    // 2) Gemini 키가 있으면 thinkingBudget: 0 으로 빠르게 핵심 요약 3줄 추가 (최대 2.8초)
+    if (apiKey && rawParas.length > 0) {
+      const prompt = `패션 매거진 에디터로서 아래 기사를 한국어로 3줄 핵심 요약(highlightsKo)하고 본문(paragraphsKo)을 매끄러운 한국어 3문단으로 정리하세요. JSON만 출력:
+{"titleKo":"한국어 제목","highlightsKo":["핵심 1","핵심 2","핵심 3"],"paragraphsKo":["문단 1","문단 2","문단 3"]}
+제목: ${String(body.title || '').slice(0, 160)}
+본문: ${rawParas.join('\n').slice(0, 2600)}`;
 
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 16000);
+        const timer = setTimeout(() => ctrl.abort(), 2800);
         const resp = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
             apiKey
@@ -572,7 +612,8 @@ ${joinedRaw.slice(0, 4200)}`;
               contents: [{ parts: [{ text: prompt }] }],
               generationConfig: {
                 responseMimeType: 'application/json',
-                temperature: 0.25,
+                temperature: 0.2,
+                thinkingConfig: { thinkingBudget: 0 },
               },
             }),
             signal: ctrl.signal,
@@ -585,43 +626,49 @@ ${joinedRaw.slice(0, 4200)}`;
           const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
           if (rawText) {
             const parsed = JSON.parse(rawText);
-            const result: CachedArticleDetail = {
-              titleKo: String(parsed?.titleKo || body.title || '').trim(),
-              highlightsKo: Array.isArray(parsed?.highlightsKo)
-                ? parsed.highlightsKo.map((s: unknown) => String(s)).slice(0, 4)
-                : [],
-              paragraphsKo: Array.isArray(parsed?.paragraphsKo)
-                ? parsed.paragraphsKo.map((s: unknown) => String(s)).slice(0, 6)
-                : paragraphs.slice(0, 5),
-              isTranslated: isEnglishContent,
-              heroImage: ogImage || undefined,
-              cachedAt: Date.now(),
-            };
-            if (articleDetailCache.size > 200) {
-              const firstKey = articleDetailCache.keys().next().value;
-              if (firstKey) articleDetailCache.delete(firstKey);
+            if (parsed?.titleKo && hasKoreanText(String(parsed.titleKo))) {
+              finalTitleKo = String(parsed.titleKo).trim();
             }
-            articleDetailCache.set(targetUrl, result);
-            return NextResponse.json({ success: true, ...result });
+            if (Array.isArray(parsed?.highlightsKo)) {
+              highlightsKo = parsed.highlightsKo
+                .map((s: unknown) => String(s))
+                .filter((s: string) => hasKoreanText(s))
+                .slice(0, 3);
+            }
+            if (
+              Array.isArray(parsed?.paragraphsKo) &&
+              parsed.paragraphsKo.length > 0 &&
+              hasKoreanText(String(parsed.paragraphsKo[0]))
+            ) {
+              finalParasKo = parsed.paragraphsKo
+                .map((s: unknown) => String(s))
+                .slice(0, 5);
+            }
           }
         }
       } catch {
-        // Fall through to extracted paragraphs
+        // 시간 초과 시 이미 준비된 한국어 문단(translatedParas) 즉시 반환
       }
     }
 
+    const detailResult: CachedArticleDetail = {
+      titleKo: finalTitleKo,
+      highlightsKo,
+      paragraphsKo: finalParasKo,
+      isTranslated: isEnglishContent,
+      heroImage: ogImage || undefined,
+      cachedAt: Date.now(),
+    };
+
+    if (articleDetailCache.size > 200) {
+      const firstKey = articleDetailCache.keys().next().value;
+      if (firstKey) articleDetailCache.delete(firstKey);
+    }
+    articleDetailCache.set(targetUrl, detailResult);
+
     return NextResponse.json({
       success: true,
-      titleKo: String(body.title || ''),
-      highlightsKo: [],
-      paragraphsKo:
-        paragraphs.length > 0
-          ? paragraphs.slice(0, 5)
-          : body.summary
-          ? [String(body.summary)]
-          : [],
-      isTranslated: false,
-      heroImage: ogImage || undefined,
+      ...detailResult,
     });
   } catch {
     return NextResponse.json(

@@ -162,6 +162,7 @@ export const STORAGE_KEYS = {
   STYLE_POSTS: '873oc_style_posts_v6',
   FOLLOWS: '873oc_follows_v6',
   BOOKMARKED_NEWS: '873oc_news_bookmarks_v6',
+  NEWS_CACHE: '873oc_news_cache_ko_v7',
   THEME: '873oc_theme_v6',
   CONFIG: '873oc_api_cfg_v6',
 };

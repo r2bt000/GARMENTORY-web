@@ -226,12 +226,22 @@ export default function AuraFitClient() {
         const parsed = JSON.parse(savedPostsRaw);
         if (Array.isArray(parsed)) setStylePosts(parsed);
       }
+      const savedNewsCache = localStorage.getItem(STORAGE_KEYS.NEWS_CACHE);
+      if (savedNewsCache) {
+        const parsedNews = JSON.parse(savedNewsCache);
+        if (Array.isArray(parsedNews) && parsedNews.length > 0) {
+          setNewsArticles(parsedNews);
+          setIsLoadingNews(false);
+        }
+      }
       const savedBookmarks = localStorage.getItem(STORAGE_KEYS.BOOKMARKED_NEWS);
       if (savedBookmarks) {
         const parsed = JSON.parse(savedBookmarks);
         if (Array.isArray(parsed)) setBookmarkedNewsIds(parsed);
       }
-      const savedCfg = localStorage.getItem(STORAGE_KEYS.CONFIG);
+      const savedCfg =
+        localStorage.getItem(STORAGE_KEYS.CONFIG) ||
+        localStorage.getItem('oblique_api_cfg_v5');
       if (savedCfg) {
         const parsed = JSON.parse(savedCfg) as Partial<ApiConfig>;
         setApiConfig((prev) => ({
@@ -283,6 +293,14 @@ export default function AuraFitClient() {
         const json = await res.json();
         if (Array.isArray(json?.articles) && json.articles.length > 0) {
           setNewsArticles(json.articles);
+          try {
+            localStorage.setItem(
+              STORAGE_KEYS.NEWS_CACHE,
+              JSON.stringify(json.articles)
+            );
+          } catch {
+            // ignore storage quota
+          }
         }
       } catch {
         // ignore network hiccup
