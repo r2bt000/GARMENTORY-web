@@ -1,6 +1,7 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { type User } from '@supabase/supabase-js';
 import {
   Camera,
@@ -182,13 +183,32 @@ export default function AppModals({
   onCloseZoomImage,
   onDownloadImage,
 }: AppModalsProps) {
-  return (
+  const [portalReady, setPortalReady] = useState<boolean>(false);
+
+  useEffect(() => {
+    setPortalReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!authModalOpen && !uploadModalOpen && !editingCloth && !zoomImageUrl) {
+      return;
+    }
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [authModalOpen, uploadModalOpen, editingCloth, zoomImageUrl]);
+
+  if (!portalReady) return null;
+
+  return createPortal(
     <>
-      {/* 1. 로그인 · 회원가입 모달 (무색 블러 배경) */}
+      {/* 1. 로그인 · 회원가입 모달 (상단 출발 + 무색 블러 배경) */}
       {authModalOpen && (
         <div
           onClick={onCloseAuthModal}
-          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
+          className="fixed inset-0 z-[100] bg-transparent backdrop-blur-md overflow-y-auto overscroll-contain flex items-start justify-center pt-14 sm:pt-20 pb-16 px-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -349,11 +369,11 @@ export default function AppModals({
       {uploadModalOpen && (
         <div
           onClick={onCloseUploadModal}
-          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
+          className="fixed inset-0 z-[100] bg-transparent backdrop-blur-md overflow-y-auto overscroll-contain flex items-start justify-center pt-12 sm:pt-16 pb-16 px-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-7 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-5 animate-fade-soft"
+            className="w-full max-w-lg rounded-3xl bg-white p-6 sm:p-7 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-5 animate-fade-soft"
           >
             <div className="flex items-center justify-between">
               <div>
@@ -684,11 +704,11 @@ export default function AppModals({
       {editingCloth && (
         <div
           onClick={onCloseEditCloth}
-          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
+          className="fixed inset-0 z-[100] bg-transparent backdrop-blur-md overflow-y-auto overscroll-contain flex items-start justify-center pt-12 sm:pt-16 pb-16 px-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-7 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-5 animate-fade-soft"
+            className="w-full max-w-md rounded-3xl bg-white p-6 sm:p-7 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-5 animate-fade-soft"
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-extrabold text-zinc-950">
@@ -886,11 +906,11 @@ export default function AppModals({
         </div>
       )}
 
-      {/* 4. 고해상도 이미지 확대 뷰어 (무색 투명 블러 배경) */}
+      {/* 4. 고해상도 이미지 확대 뷰어 (상단 출발 + 무색 투명 블러 배경) */}
       {zoomImageUrl && (
         <div
           onClick={onCloseZoomImage}
-          className="fixed inset-0 z-50 bg-white/35 backdrop-blur-md flex items-center justify-center p-4"
+          className="fixed inset-0 z-[100] bg-transparent backdrop-blur-md overflow-y-auto overscroll-contain flex items-start justify-center pt-12 sm:pt-16 pb-16 px-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -927,6 +947,7 @@ export default function AppModals({
           </div>
         </div>
       )}
-    </>
+    </>,
+    document.body
   );
 }

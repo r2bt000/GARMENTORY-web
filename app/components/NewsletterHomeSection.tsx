@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   ArrowRight,
@@ -52,8 +53,22 @@ export default function NewsletterHomeSection({
   onOpenArticle,
   onCloseArticle,
 }: NewsletterHomeProps) {
+  const [portalReady, setPortalReady] = useState<boolean>(false);
   const [activeFilter, setActiveFilter] = useState<NewsFilter>('최신');
   const [heroIndex, setHeroIndex] = useState<number>(0);
+
+  useEffect(() => {
+    setPortalReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!activeArticle) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [activeArticle]);
 
   const heroPool = articles.slice(0, 5);
   const safeHeroIdx =
@@ -336,131 +351,136 @@ export default function NewsletterHomeSection({
         </div>
       )}
 
-      {/* 4. 인앱 한국어 번역 매거진 리더 모달 */}
-      {activeArticle && (
-        <div
-          onClick={onCloseArticle}
-          className="fixed inset-0 z-50 bg-white/30 backdrop-blur-md flex items-center justify-center p-4"
-        >
+      {/* 4. 인앱 한국어 번역 매거진 리더 모달 (포털 + 상단 정렬 스크롤) */}
+      {portalReady &&
+        activeArticle &&
+        createPortal(
           <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-3xl bg-white p-6 sm:p-8 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-6 animate-fade-soft"
+            onClick={onCloseArticle}
+            className="fixed inset-0 z-[100] bg-transparent backdrop-blur-md overflow-y-auto overscroll-contain flex items-start justify-center pt-12 sm:pt-16 pb-16 px-4"
           >
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-xs font-semibold text-zinc-400">
-                <span className="text-zinc-950 font-bold">
-                  {activeArticle.category}
-                </span>
-                <span>·</span>
-                <span>{activeArticle.sourceName}</span>
-                {(activeArticle.isTranslated ||
-                  articleDetail?.isTranslated) && (
-                  <span className="px-2 py-0.5 rounded-full bg-[#F4F4F5] text-zinc-800 text-[10px] font-bold">
-                    영문 기사 → 한국어 자동 번역
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-2xl rounded-3xl bg-white p-6 sm:p-8 shadow-[0_24px_70px_rgba(0,0,0,0.14)] ring-1 ring-black/5 space-y-6 animate-fade-soft"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-zinc-400">
+                  <span className="text-zinc-950 font-bold">
+                    {activeArticle.category}
                   </span>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={onCloseArticle}
-                className="w-8 h-8 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 flex items-center justify-center text-zinc-700 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              <h3 className="text-xl sm:text-2xl font-extrabold tracking-tight leading-snug text-zinc-950">
-                {articleDetail?.titleKo || activeArticle.title}
-              </h3>
-              {activeArticle.originalTitle &&
-                activeArticle.originalTitle !==
-                  (articleDetail?.titleKo || activeArticle.title) && (
-                  <p className="text-xs text-zinc-400">
-                    원제: {activeArticle.originalTitle}
-                  </p>
-                )}
-            </div>
-
-            <div className="aspect-[16/10] rounded-2xl overflow-hidden bg-[#F4F4F5]">
-              <img
-                referrerPolicy="no-referrer"
-                src={articleDetail?.heroImage || activeArticle.image}
-                alt={activeArticle.title}
-                className="w-full h-full object-cover"
-              />
-            </div>
-
-            {isLoadingDetail ? (
-              <div className="py-8 space-y-3">
-                <div className="flex items-center gap-2 text-xs font-semibold text-zinc-500">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>
-                    원문 본문을 읽어 한국어 뉴스레터로 번역·정리하고 있습니다...
-                  </span>
-                </div>
-                <div className="h-4 w-full rounded bg-[#F4F4F5] animate-pulse" />
-                <div className="h-4 w-11/12 rounded bg-[#F4F4F5] animate-pulse" />
-                <div className="h-4 w-4/5 rounded bg-[#F4F4F5] animate-pulse" />
-              </div>
-            ) : (
-              <div className="space-y-5">
-                {articleDetail &&
-                  articleDetail.highlightsKo &&
-                  articleDetail.highlightsKo.length > 0 && (
-                    <div className="rounded-2xl bg-[#F7F7F8] p-4 space-y-2">
-                      <p className="text-[11px] font-extrabold uppercase tracking-wider text-zinc-500">
-                        KEY BRIEFING
-                      </p>
-                      <ul className="space-y-1.5 text-xs sm:text-[13px] font-medium text-zinc-800 leading-relaxed">
-                        {articleDetail.highlightsKo.map((pt, idx) => (
-                          <li key={idx} className="flex items-start gap-2">
-                            <span className="text-zinc-400 select-none">•</span>
-                            <span>{pt}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                  <span>·</span>
+                  <span>{activeArticle.sourceName}</span>
+                  {(activeArticle.isTranslated ||
+                    articleDetail?.isTranslated) && (
+                    <span className="px-2 py-0.5 rounded-full bg-[#F4F4F5] text-zinc-800 text-[10px] font-bold">
+                      영문 기사 → 한국어 자동 번역
+                    </span>
                   )}
-
-                <div className="space-y-4 text-sm text-zinc-700 leading-[1.8]">
-                  {(articleDetail && articleDetail.paragraphsKo.length > 0
-                    ? articleDetail.paragraphsKo
-                    : [activeArticle.summary]
-                  )
-                    .filter(Boolean)
-                    .map((para, idx) => (
-                      <p key={idx}>{para}</p>
-                    ))}
                 </div>
+                <button
+                  type="button"
+                  onClick={onCloseArticle}
+                  className="w-8 h-8 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 flex items-center justify-center text-zinc-700 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-            )}
 
-            <div className="pt-3 flex items-center justify-between gap-3 border-t border-[#F1F1F3]">
-              <button
-                type="button"
-                onClick={() => onToggleBookmark(activeArticle.id)}
-                className="px-4 py-2.5 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 text-xs font-bold text-zinc-800 inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <Bookmark className="w-3.5 h-3.5" />
-                {bookmarkedIds.includes(activeArticle.id)
-                  ? '북마크됨'
-                  : '북마크 저장'}
-              </button>
+              <div className="space-y-2">
+                <h3 className="text-xl sm:text-2xl font-extrabold tracking-tight leading-snug text-zinc-950">
+                  {articleDetail?.titleKo || activeArticle.title}
+                </h3>
+                {activeArticle.originalTitle &&
+                  activeArticle.originalTitle !==
+                    (articleDetail?.titleKo || activeArticle.title) && (
+                    <p className="text-xs text-zinc-400">
+                      원제: {activeArticle.originalTitle}
+                    </p>
+                  )}
+              </div>
 
-              <a
-                href={activeArticle.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-5 py-2.5 rounded-full bg-zinc-950 text-white text-xs font-bold hover:bg-zinc-800 inline-flex items-center gap-1.5"
-              >
-                <span>원문 매거진 보기</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
+              <div className="aspect-[16/10] rounded-2xl overflow-hidden bg-[#F4F4F5]">
+                <img
+                  referrerPolicy="no-referrer"
+                  src={articleDetail?.heroImage || activeArticle.image}
+                  alt={activeArticle.title}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+
+              {isLoadingDetail ? (
+                <div className="py-8 space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-zinc-500">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>
+                      원문 본문을 읽어 한국어 뉴스레터로 번역·정리하고 있습니다...
+                    </span>
+                  </div>
+                  <div className="h-4 w-full rounded bg-[#F4F4F5] animate-pulse" />
+                  <div className="h-4 w-11/12 rounded bg-[#F4F4F5] animate-pulse" />
+                  <div className="h-4 w-4/5 rounded bg-[#F4F4F5] animate-pulse" />
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {articleDetail &&
+                    articleDetail.highlightsKo &&
+                    articleDetail.highlightsKo.length > 0 && (
+                      <div className="rounded-2xl bg-[#F7F7F8] p-4 space-y-2">
+                        <p className="text-[11px] font-extrabold uppercase tracking-wider text-zinc-500">
+                          KEY BRIEFING
+                        </p>
+                        <ul className="space-y-1.5 text-xs sm:text-[13px] font-medium text-zinc-800 leading-relaxed">
+                          {articleDetail.highlightsKo.map((pt, idx) => (
+                            <li key={idx} className="flex items-start gap-2">
+                              <span className="text-zinc-400 select-none">
+                                •
+                              </span>
+                              <span>{pt}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                  <div className="space-y-4 text-sm text-zinc-700 leading-[1.8]">
+                    {(articleDetail && articleDetail.paragraphsKo.length > 0
+                      ? articleDetail.paragraphsKo
+                      : [activeArticle.summary]
+                    )
+                      .filter(Boolean)
+                      .map((para, idx) => (
+                        <p key={idx}>{para}</p>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-3 flex items-center justify-between gap-3 border-t border-[#F1F1F3]">
+                <button
+                  type="button"
+                  onClick={() => onToggleBookmark(activeArticle.id)}
+                  className="px-4 py-2.5 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 text-xs font-bold text-zinc-800 inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Bookmark className="w-3.5 h-3.5" />
+                  {bookmarkedIds.includes(activeArticle.id)
+                    ? '북마크됨'
+                    : '북마크 저장'}
+                </button>
+
+                <a
+                  href={activeArticle.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-5 py-2.5 rounded-full bg-zinc-950 text-white text-xs font-bold hover:bg-zinc-800 inline-flex items-center gap-1.5"
+                >
+                  <span>원문 매거진 보기</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </section>
   );
 }

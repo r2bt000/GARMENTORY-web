@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   Camera,
@@ -10,6 +11,7 @@ import {
   MessageCircle,
   Pencil,
   Plus,
+  Search,
   Send,
   Sparkles,
   Trash2,
@@ -92,6 +94,8 @@ const CLOSET_FILTERS: (CategoryType | '전체' | '구매 예정')[] = [
   '구매 예정',
 ];
 
+const FOLLOW_BATCH_SIZE = 20;
+
 function ProfileAvatar({
   avatarUrl,
   handle,
@@ -157,6 +161,7 @@ export default function ProfileAndClosetSection({
   onDeleteProposalReply,
   onAdoptProposalToSaved,
 }: ProfileAndClosetProps) {
+  const [portalReady, setPortalReady] = useState<boolean>(false);
   const [closetFilter, setClosetFilter] =
     useState<CategoryType | '전체' | '구매 예정'>('전체');
   const [editProfileOpen, setEditProfileOpen] = useState<boolean>(false);
@@ -169,10 +174,15 @@ export default function ProfileAndClosetSection({
   const [removeAvatarFlag, setRemoveAvatarFlag] = useState<boolean>(false);
   const [isSavingProfile, setIsSavingProfile] = useState<boolean>(false);
 
-  // 팔로워 / 팔로잉 리스트 모달 (무색 블러 적용)
+  // 팔로워 / 팔로잉 리스트 모달 (상단 고정 출발 + 무한 스크롤 + 무색 블러)
   const [followModalType, setFollowModalType] = useState<
     'followers' | 'following' | null
   >(null);
+  const [visibleFollowCount, setVisibleFollowCount] =
+    useState<number>(FOLLOW_BATCH_SIZE);
+  const [followFilterQuery, setFollowFilterQuery] = useState<string>('');
+  const followOverlayRef = useRef<HTMLDivElement | null>(null);
+  const followSentinelRef = useRef<HTMLDivElement | null>(null);
 
   // 타 사용자 옷장 코디 제안 선택 상태
   const [proposalIds, setProposalIds] = useState<number[]>([]);
@@ -186,6 +196,91 @@ export default function ProfileAndClosetSection({
   const [submittingReplyPropId, setSubmittingReplyPropId] = useState<
     string | null
   >(null);
+
+  useEffect(() => {
+    setPortalReady(true);
+  }, []);
+
+  const rawFollowList =
+    followModalType === 'followers' ? followerUsers : followingUsers;
+
+  const filteredFollowList = useMemo(() => {
+    const q = followFilterQuery.trim().toLowerCase().replace(/^@/, '');
+    if (!q) return rawFollowList;
+    return rawFollowList.filter((u) =>
+      u.handle.toLowerCase().replace(/^@/, '').includes(q)
+    );
+  }, [rawFollowList, followFilterQuery]);
+
+  const visibleFollowList = useMemo(
+    () => filteredFollowList.slice(0, visibleFollowCount),
+    [filteredFollowList, visibleFollowCount]
+  );
+
+  // 모달 열릴 때 항상 화면 최상단부터 시작 + 배경 페이지 스크롤 잠금
+  useEffect(() => {
+    if (!followModalType) return;
+    setVisibleFollowCount(FOLLOW_BATCH_SIZE);
+    setFollowFilterQuery('');
+    if (followOverlayRef.current) {
+      followOverlayRef.current.scrollTop = 0;
+    }
+
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleEsc = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setFollowModalType(null);
+    };
+    window.addEventListener('keydown', handleEsc);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, [followModalType]);
+
+  // 검색어 변경 시 무한 스크롤 초기 배치 리셋
+  useEffect(() => {
+    setVisibleFollowCount(FOLLOW_BATCH_SIZE);
+  }, [followFilterQuery]);
+
+  // IntersectionObserver 기반 자동 무한 스크롤
+  useEffect(() => {
+    if (!followModalType) return;
+    const sentinel = followSentinelRef.current;
+    if (!sentinel) return;
+    if (visibleFollowCount >= filteredFollowList.length) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleFollowCount((prev) =>
+            Math.min(prev + FOLLOW_BATCH_SIZE, filteredFollowList.length)
+          );
+        }
+      },
+      {
+        root: followOverlayRef.current,
+        rootMargin: '200px',
+      }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [followModalType, visibleFollowCount, filteredFollowList.length]);
+
+  const handleFollowOverlayScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (
+      visibleFollowCount < filteredFollowList.length &&
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 200
+    ) {
+      setVisibleFollowCount((prev) =>
+        Math.min(prev + FOLLOW_BATCH_SIZE, filteredFollowList.length)
+      );
+    }
+  };
 
   const filteredCloset = profileUser.closet.filter((item) => {
     if (closetFilter === '전체') return true;
@@ -1189,73 +1284,140 @@ export default function ProfileAndClosetSection({
         </div>
       )}
 
-      {/* 팔로워 / 팔로잉 유저 목록 모달 — 검은색 배경 없이 깨끗한 무색 투명 블러 적용! */}
-      {followModalType && (
-        <div
-          onClick={() => setFollowModalType(null)}
-          className="fixed inset-0 z-50 bg-transparent backdrop-blur-md flex items-center justify-center p-4"
-        >
+      {/* 팔로워 / 팔로잉 유저 목록 모달 — document.body 포털로 화면 최상단부터 즉시 노출 + 무색 블러 + 무한 스크롤! */}
+      {portalReady &&
+        followModalType &&
+        createPortal(
           <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-[0_20px_60px_rgba(0,0,0,0.12)] ring-1 ring-black/5 space-y-4 animate-fade-soft"
+            ref={followOverlayRef}
+            onScroll={handleFollowOverlayScroll}
+            onClick={() => setFollowModalType(null)}
+            className="fixed inset-0 z-[100] bg-transparent backdrop-blur-md overflow-y-auto overscroll-contain flex items-start justify-center pt-14 sm:pt-20 pb-16 px-4"
           >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-extrabold text-zinc-950">
-                {followModalType === 'followers' ? '팔로워' : '팔로잉'}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setFollowModalType(null)}
-                className="w-8 h-8 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 flex items-center justify-center cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {(followModalType === 'followers'
-              ? followerUsers
-              : followingUsers
-            ).length === 0 ? (
-              <p className="py-8 text-center text-xs text-zinc-400">
-                {followModalType === 'followers'
-                  ? '아직 팔로워가 없습니다.'
-                  : '아직 팔로우한 사용자가 없습니다.'}
-              </p>
-            ) : (
-              <div className="space-y-2 max-h-72 overflow-y-auto">
-                {(followModalType === 'followers'
-                  ? followerUsers
-                  : followingUsers
-                ).map((u) => (
-                  <button
-                    key={u.id}
-                    type="button"
-                    onClick={() => {
-                      setFollowModalType(null);
-                      onVisitUserProfile(u.id, u.handle);
-                    }}
-                    className="w-full p-2.5 rounded-2xl hover:bg-[#F7F7F8] flex items-center justify-between transition cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <ProfileAvatar
-                        avatarUrl={u.avatarUrl || avatarByUserId.get(u.id)}
-                        handle={u.handle}
-                        sizeClass="w-8 h-8 text-xs"
-                      />
-                      <span className="text-xs font-bold text-zinc-900">
-                        {u.handle}
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-3xl bg-white shadow-[0_20px_60px_rgba(0,0,0,0.12)] ring-1 ring-black/5 animate-fade-soft"
+            >
+              {/* 상단 고정 헤더: 팔로워 · 팔로잉 즉시 전환 및 닫기 */}
+              <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm rounded-t-3xl px-6 pt-5 pb-3.5 border-b border-[#F4F4F5] space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-5">
+                    <button
+                      type="button"
+                      onClick={() => setFollowModalType('followers')}
+                      className={`text-sm sm:text-base transition cursor-pointer ${
+                        followModalType === 'followers'
+                          ? 'font-extrabold text-zinc-950'
+                          : 'font-semibold text-zinc-400 hover:text-zinc-800'
+                      }`}
+                    >
+                      팔로워{' '}
+                      <span className="tabular-nums">
+                        {followerUsers.length}
                       </span>
-                    </div>
-                    <span className="text-[11px] text-zinc-400">
-                      프로필 보기 →
-                    </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFollowModalType('following')}
+                      className={`text-sm sm:text-base transition cursor-pointer ${
+                        followModalType === 'following'
+                          ? 'font-extrabold text-zinc-950'
+                          : 'font-semibold text-zinc-400 hover:text-zinc-800'
+                      }`}
+                    >
+                      팔로잉{' '}
+                      <span className="tabular-nums">
+                        {followingUsers.length}
+                      </span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setFollowModalType(null)}
+                    aria-label="목록 닫기"
+                    className="w-8 h-8 rounded-full bg-[#F4F4F5] hover:bg-zinc-200 flex items-center justify-center cursor-pointer shrink-0"
+                  >
+                    <X className="w-4 h-4" />
                   </button>
-                ))}
+                </div>
+
+                {rawFollowList.length >= 6 && (
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={followFilterQuery}
+                      onChange={(e) => setFollowFilterQuery(e.target.value)}
+                      placeholder="@아이디 검색"
+                      className="w-full pl-9 pr-8 py-2 rounded-full bg-[#F4F4F5] text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none"
+                    />
+                    {followFilterQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setFollowFilterQuery('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-900 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </div>
-      )}
+
+              {/* 무한 스크롤 유저 목록 */}
+              <div className="px-4 py-3">
+                {filteredFollowList.length === 0 ? (
+                  <p className="py-10 text-center text-xs text-zinc-400">
+                    {followFilterQuery.trim()
+                      ? `'${followFilterQuery}' 아이디와 일치하는 사용자가 없습니다.`
+                      : followModalType === 'followers'
+                      ? '아직 팔로워가 없습니다.'
+                      : '아직 팔로우한 사용자가 없습니다.'}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {visibleFollowList.map((u) => (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => {
+                          setFollowModalType(null);
+                          onVisitUserProfile(u.id, u.handle);
+                        }}
+                        className="w-full p-2.5 rounded-2xl hover:bg-[#F7F7F8] flex items-center justify-between transition cursor-pointer"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <ProfileAvatar
+                            avatarUrl={u.avatarUrl || avatarByUserId.get(u.id)}
+                            handle={u.handle}
+                            sizeClass="w-9 h-9 text-xs"
+                          />
+                          <span className="text-xs sm:text-[13px] font-bold text-zinc-900 truncate">
+                            {u.handle}
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-medium text-zinc-400 shrink-0 ml-2">
+                          프로필 보기 →
+                        </span>
+                      </button>
+                    ))}
+
+                    {visibleFollowCount < filteredFollowList.length && (
+                      <div
+                        ref={followSentinelRef}
+                        className="py-3 text-center text-[11px] text-zinc-400"
+                      >
+                        목록 불러오는 중...
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </section>
   );
 }
