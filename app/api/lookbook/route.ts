@@ -3,12 +3,7 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-export type StylePresetId =
-  | 'editorial_street'
-  | 'minimal_studio'
-  | 'underground_flash';
-
-export type FitTargetId = 'crop_fit' | 'female' | 'male' | 'my_photo';
+export type FitTargetId = 'male' | 'female' | 'crop_fit' | 'my_photo';
 
 interface GarmentInput {
   name: string;
@@ -19,7 +14,6 @@ interface GarmentInput {
 
 interface LookbookRequestBody {
   isDarkMode: boolean;
-  stylePreset: StylePresetId;
   fitTarget: FitTargetId;
   activeGenre: string;
   selectedDetails?: string[];
@@ -37,7 +31,7 @@ interface InlineImagePart {
   };
 }
 
-// IP당 분당 최대 10회 화보 생성 허용 (API 과금·쿼터 보호)
+// IP당 분당 최대 10회 화보 생성 허용 (API 쿼터 보호)
 const lookbookBuckets = new Map<string, number[]>();
 function allowLookbookCall(ip: string): boolean {
   const now = Date.now();
@@ -51,26 +45,8 @@ function allowLookbookCall(ip: string): boolean {
   return true;
 }
 
-const STYLE_LOCK_PROMPTS: Record<
-  StylePresetId,
-  { label: string; photographyPrompt: string }
-> = {
-  editorial_street: {
-    label: '한남·성수 스트릿 스냅',
-    photographyPrompt:
-      'Shot on Contax T2 35mm film camera, soft overcast natural daylight in Seoul Hannam-dong / Seongsu architectural concrete and warm limestone sidewalk, effortless candid full-body street fashion lookbook framing, subtle 35mm film grain, muted neutral editorial color grading, natural fabric movement and realistic shadows, vertical 3:4 Pinterest fashion editorial photograph.',
-  },
-  minimal_studio: {
-    label: '클린 호리존 스튜디오',
-    photographyPrompt:
-      'High-fashion Korean contemporary e-commerce lookbook photography (29CM / Musinsa Studio Editorial aesthetic) in front of a clean seamless warm off-white plaster cyclorama wall and matte concrete floor, soft diffused studio key lighting with gentle natural floor shadow, crisp full-body vertical 3:4 portrait framing, ultra-accurate garment color, stitching, hardware, and drape fidelity.',
-  },
-  underground_flash: {
-    label: '언더그라운드 플래시 아카이브',
-    photographyPrompt:
-      'Raw 35mm point-and-shoot night street snap with direct on-camera xenon flash, dark industrial concrete alley and brushed metallic shutter backdrop, high-contrast Tokyo/Paris underground archive magazine aesthetic (Rick Owens / avant-garde subculture mood), crisp specular flash highlights on leather, denim, and silver hardware, vertical 3:4 editorial lookbook photograph.',
-  },
-};
+const WHITE_STUDIO_PHOTOGRAPHY_DIRECTION =
+  'Shot in a clean, minimalist professional fashion photography studio against a pure seamless solid white cyclorama wall and white studio floor (#FFFFFF infinity cove). Zero outdoor background, zero furniture, zero props, zero text, zero logos or watermarks. Even, soft commercial lookbook lighting (SSENSE / 29CM / Musinsa Studio official catalog model shot aesthetic) with balanced fill light so dark and black garments retain crisp seam lines, zippers, quilting, hardware, and fabric texture separation against the clean white backdrop, with only a subtle natural soft contact shadow directly beneath the shoes. Vertical 3:4 full-length studio lookbook framing.';
 
 async function resolveImageToInlineData(
   src: string
@@ -78,7 +54,6 @@ async function resolveImageToInlineData(
   if (!src || typeof src !== 'string') return null;
   const trimmed = src.trim();
 
-  // SVG 아이콘 데이터는 바이너리 참조 이미지에서 제외 (텍스트 설명으로만 반영)
   if (trimmed.startsWith('data:image/svg')) {
     return null;
   }
@@ -102,7 +77,7 @@ async function resolveImageToInlineData(
         method: 'GET',
         headers: {
           'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
           Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
         },
         signal: controller.signal,
@@ -228,7 +203,7 @@ export async function POST(request: Request) {
           success: false,
           rateLimited: true,
           message:
-            '분당 화보 생성 요청 한도(10회)에 도달했습니다. 잠시 후 다시 시도해 주세요.',
+            '분당 스튜디오 모델샷 생성 한도(10회)에 도달했습니다. 잠시 후 다시 시도해 주세요.',
         },
         { status: 429 }
       );
@@ -241,7 +216,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          message: '화보를 생성할 의류를 1벌 이상 먼저 터치해 선택해 주세요.',
+          message: '모델샷을 생성할 의류를 1벌 이상 먼저 터치해 선택해 주세요.',
         },
         { status: 400 }
       );
@@ -258,7 +233,6 @@ export async function POST(request: Request) {
       ''
     ).trim();
 
-    // 전용 FASHN AI 엔진 우선 요청 시 처리 (내 전신 사진 가상 피팅)
     if (
       body.fitTarget === 'my_photo' &&
       body.userModelImage &&
@@ -279,7 +253,7 @@ export async function POST(request: Request) {
           success: true,
           imageDataUrl: fashnRes.imageDataUrl,
           engineLabel: 'FASHN AI Virtual Try-On v1.6',
-          presetLabel: '내 전신 사진 가상 피팅',
+          presetLabel: '화이트 스튜디오 · 내 사진 피팅',
         });
       }
       if (!geminiKey) {
@@ -298,17 +272,9 @@ export async function POST(request: Request) {
         success: false,
         missingKey: true,
         message:
-          'AI 실사 화보 엔진을 작동하려면 GEMINI_API_KEY가 필요합니다. 우측 상단 [DB · API] 창에 키를 입력하거나 Vercel 환경변수(GEMINI_API_KEY)에 등록해 주세요.',
+          '화이트 스튜디오 AI 모델샷 엔진을 작동하려면 GEMINI_API_KEY가 필요합니다. 우측 상단 [DB · API] 창에 키를 입력하거나 Vercel 환경변수(GEMINI_API_KEY)에 등록해 주세요.',
       });
     }
-
-    const presetKey: StylePresetId =
-      body.stylePreset && STYLE_LOCK_PROMPTS[body.stylePreset]
-        ? body.stylePreset
-        : body.isDarkMode
-        ? 'underground_flash'
-        : 'editorial_street';
-    const presetObj = STYLE_LOCK_PROMPTS[presetKey];
 
     const parts: Array<InlineImagePart | { text: string }> = [];
     const referenceMappingLines: string[] = [];
@@ -321,7 +287,7 @@ export async function POST(request: Request) {
       if (userInline) {
         parts.push({ inlineData: userInline });
         referenceMappingLines.push(
-          `- Reference Image #${refCounter}: TARGET PERSON PHOTO (keep this exact person's body proportions, pose, skin tone, hairstyle, and identity, and dress them naturally in all selected garments below).`
+          `- Reference Image #${refCounter}: TARGET PERSON PHOTO (preserve this exact person's face, hairstyle, body proportions, and natural standing pose, dress them in all selected garments below, and place them cleanly inside a pure white cyclorama photography studio).`
         );
         refCounter += 1;
         hasUserPhotoInline = true;
@@ -329,6 +295,12 @@ export async function POST(request: Request) {
     }
 
     // 2) 선택된 옷장 의류 이미지들을 순서대로 인라인 참조 이미지로 주입
+    const allNamesJoined = garments.map((g) => `${g.name} ${g.category}`).join(' ');
+    const hasHeadAccessory =
+      /(선글라스|아이웨어|안경|고글|아이\s*자켓|모자|볼캡|비니|버킷햇|eye\s*jacket|sunglasses|eyewear|glasses|goggles|cap|hat|beanie)/i.test(
+        allNamesJoined
+      );
+
     for (let i = 0; i < garments.length; i++) {
       const g = garments[i];
       const cleanName = String(g.name || '선택 의류').slice(0, 80);
@@ -337,7 +309,7 @@ export async function POST(request: Request) {
       if (inline) {
         parts.push({ inlineData: inline });
         referenceMappingLines.push(
-          `- Reference Image #${refCounter}: [${cleanCat}] "${cleanName}" — faithfully reproduce the exact garment silhouette, color, fabric texture, collar/zipper/pocket details, and any small emblem from this product photo.`
+          `- Reference Image #${refCounter}: [${cleanCat}] "${cleanName}" — faithfully reproduce the exact garment silhouette, color, fabric texture, collar/zipper/pocket details, and any small logo from this product photo.`
         );
         refCounter += 1;
       } else {
@@ -347,45 +319,60 @@ export async function POST(request: Request) {
       }
     }
 
-    // 3) 피팅 대상 모델 디렉션 구성
+    // 3) 화이트 스튜디오 모델 디렉션 구성
     let subjectDirection =
-      'A stylish Korean fashion editorial model in their mid-20s standing naturally from head to toe (full-body shot including shoes).';
+      'A clean-cut Korean male fashion lookbook model in his mid-20s standing in a relaxed, natural front-facing full-body catalog pose from head to shoes (entire head and shoes fully visible inside frame).';
+    let presetBadgeLabel = '화이트 스튜디오 · 남성 모델샷';
+
     if (hasUserPhotoInline) {
       subjectDirection =
-        'Virtual Try-On: Dress the exact person from Reference Image #1 in the complete outfit below. Preserve the person’s face, body build, and natural stance while seamlessly replacing their clothing with all selected garments.';
-    } else if (body.fitTarget === 'crop_fit') {
-      subjectDirection =
-        'A Pinterest OOTD neck-to-toe editorial crop (framed cleanly from just below the chin down to the shoes so focus is 100% on outfit proportions, layering, and footwear) on a stylish model in their mid-20s.';
+        'Virtual Try-On in White Studio: Dress the exact person from Reference Image #1 in all selected garments below while placing them cleanly in a pure white studio cyclorama background.';
+      presetBadgeLabel = '화이트 스튜디오 · 내 사진 피팅';
     } else if (body.fitTarget === 'female') {
       subjectDirection =
-        'A stylish Korean female fashion editorial model in her mid-20s, effortless full-body head-to-toe standing pose showing outerwear/top, bottoms, and footwear clearly.';
-    } else if (body.fitTarget === 'male') {
+        'A clean-cut Korean female fashion lookbook model in her mid-20s standing in a relaxed, natural front-facing full-body catalog pose from head to shoes (entire head and shoes fully visible inside frame).';
+      presetBadgeLabel = '화이트 스튜디오 · 여성 모델샷';
+    } else if (body.fitTarget === 'crop_fit' && !hasHeadAccessory) {
       subjectDirection =
-        'A stylish Korean male fashion editorial model in his mid-20s, effortless full-body head-to-toe standing pose showing outerwear/top, bottoms, and footwear clearly.';
+        'A clean e-commerce lookbook neck-to-toe studio crop (framed cleanly from just below the chin down to the shoes so 100% of attention is on garment fit, layering, and footwear) on a stylish fashion model.';
+      presetBadgeLabel = '화이트 스튜디오 · 크롭 모델샷';
+    } else if (body.fitTarget === 'crop_fit' && hasHeadAccessory) {
+      subjectDirection =
+        'A clean Korean fashion lookbook model standing full-body from head to shoes so the selected eyewear/hat accessory and complete outfit are clearly visible.';
+      presetBadgeLabel = '화이트 스튜디오 · 전신 모델샷';
     }
 
     const detailKeywords = Array.isArray(body.selectedDetails)
       ? body.selectedDetails.slice(0, 6).join(', ')
       : '';
 
-    // 누락된 카테고리(예: 아우터만 선택했을 때 이너/바지/신발)는 장르에 맞는 무채색 미니멀 베이직으로 자연스럽게 매칭 지시
     const selectedCategories = garments.map((g) => g.category);
+    const hasTop = selectedCategories.includes('상의');
+    const hasBottom = selectedCategories.includes('하의');
+    const hasShoes = selectedCategories.includes('신발');
+
+    const missingBasicsParts: string[] = [];
+    if (!hasTop) missingBasicsParts.push('a clean neutral plain inner t-shirt');
+    if (!hasBottom) missingBasicsParts.push('clean minimal wide-fit trousers');
+    if (!hasShoes) missingBasicsParts.push('clean minimal sneakers or leather derby shoes');
+
     const autoCompleteNote =
-      selectedCategories.length < 3
-        ? 'For any clothing category not explicitly provided in the list (such as neutral inner tee, clean wide trousers, or minimal leather shoes/sneakers), pair understated neutral basics that harmonize with the featured garment without stealing focus.'
-        : 'Combine all selected garments together into one cohesive layered outfit on a single person.';
+      missingBasicsParts.length > 0
+        ? `Combine all selected garments on a single model. For unselected categories (${missingBasicsParts.join(
+            ', '
+          )}), pair understated neutral basics so the look is complete without distracting from the selected items.`
+        : 'Combine all selected garments together into one cohesive layered outfit on a single model.';
 
     const masterPrompt = [
-      'Generate ONE single photorealistic vertical 3:4 high-fashion editorial lookbook photograph (NO split screen, NO collage, NO floating product cutouts, NO text, NO watermarks, NO UI overlays).',
-      `Fashion Mood & Styling Genre: ${String(body.activeGenre || '미니멀').slice(0, 40)}${
+      'Generate ONE single photorealistic vertical 3:4 studio fashion lookbook model photograph (NO collage, NO split screen, NO floating product cutouts, NO text, NO watermarks).',
+      `Styling Genre Reference: ${String(body.activeGenre || '미니멀').slice(0, 40)}${
         detailKeywords ? ` (${detailKeywords})` : ''
       }.`,
-      `Subject & Framing: ${subjectDirection}`,
-      'Selected Wardrobe Garments to Wear Together:',
+      `Model & Pose: ${subjectDirection}`,
+      'Selected Wardrobe Items to Wear:',
       ...referenceMappingLines,
       autoCompleteNote,
-      `Style-Lock Photography & Lighting Direction: ${presetObj.photographyPrompt}`,
-      'Ensure realistic garment layering, natural fabric folds, accurate proportions, and authentic high-fashion lookbook realism.',
+      `Studio Background & Lighting (STRICT): ${WHITE_STUDIO_PHOTOGRAPHY_DIRECTION}`,
     ].join('\n');
 
     parts.push({ text: masterPrompt });
@@ -420,7 +407,6 @@ export async function POST(request: Request) {
       if (!resp.ok) {
         const errBody = await resp.text();
         lastErrorDetail = errBody.slice(0, 260);
-        // 모델 미지원(404)이거나 지역/모달리티 호환 오류(400)일 때만 예비 모델로 재시도
         if (resp.status === 404 || resp.status === 400) {
           continue;
         }
@@ -441,9 +427,9 @@ export async function POST(request: Request) {
               imageDataUrl: `data:${outMime};base64,${inlineData.data}`,
               engineLabel:
                 modelId === 'gemini-2.5-flash-image'
-                  ? 'Gemini 2.5 Flash Image · Style-Lock'
-                  : 'Gemini Multimodal Image · Style-Lock',
-              presetLabel: presetObj.label,
+                  ? 'Gemini 2.5 Flash Image · White Studio'
+                  : 'Gemini Multimodal Image · White Studio',
+              presetLabel: presetBadgeLabel,
             });
           }
         }
@@ -451,12 +437,11 @@ export async function POST(request: Request) {
       lastErrorDetail = '모델 응답에 이미지 데이터가 포함되지 않았습니다.';
     }
 
-    // 친절한 한국어 원인 안내 메시지 분기
     let friendlyMsg =
-      'AI 화보 생성 중 일시적인 오류가 발생했습니다. 잠시 후 다시 촬영 버튼을 눌러주세요.';
+      'AI 모델샷 생성 중 일시적인 오류가 발생했습니다. 잠시 후 다시 촬영 버튼을 눌러주세요.';
     if (lastStatus === 429 || lastErrorDetail.includes('RESOURCE_EXHAUSTED')) {
       friendlyMsg =
-        'Google AI Studio 이미지 생성 무료 할당량(Quota)을 초과했거나 이미지 모델이 유료 결제 계정(Tier 1) 연결을 요구하고 있습니다. AI Studio 쿼터 설정을 확인해 주세요.';
+        'Google AI Studio 이미지 생성 할당량(Quota)을 초과했거나 이미지 모델이 유료 결제 계정(Tier 1) 연결을 요구하고 있습니다. AI Studio 쿼터 설정을 확인해 주세요.';
     } else if (
       lastStatus === 401 ||
       lastStatus === 403 ||
@@ -479,7 +464,7 @@ export async function POST(request: Request) {
       {
         success: false,
         message:
-          '서버에서 화보 요청을 처리하는 중 오류가 발생했습니다. 의류 이미지 용량을 확인하거나 잠시 후 다시 시도해 주세요.',
+          '서버에서 스튜디오 모델샷 요청을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.',
       },
       { status: 500 }
     );

@@ -75,11 +75,7 @@ interface CommunityUser {
   proposals: Proposal[];
 }
 
-type LookbookPresetId =
-  | 'editorial_street'
-  | 'minimal_studio'
-  | 'underground_flash';
-type LookbookFitTarget = 'crop_fit' | 'female' | 'male' | 'my_photo';
+type LookbookFitTarget = 'male' | 'female' | 'crop_fit' | 'my_photo';
 
 interface SavedLook {
   id: number;
@@ -550,36 +546,10 @@ const compressDataUrlToWebP = (
   });
 };
 
-const LOOKBOOK_STYLE_PRESETS: {
-  id: LookbookPresetId;
-  title: string;
-  desc: string;
-  badge: string;
-}[] = [
-  {
-    id: 'editorial_street',
-    title: '한남·성수 스트릿 스냅',
-    desc: '35mm 필름 자연광 · 콘크리트 거리 무드',
-    badge: 'DAY 추천',
-  },
-  {
-    id: 'minimal_studio',
-    title: '클린 호리존 스튜디오',
-    desc: '오프화이트 호리존 · 의류 핏·원단 집중',
-    badge: '정밀 핏',
-  },
-  {
-    id: 'underground_flash',
-    title: '언더그라운드 플래시',
-    desc: '야간 직광 플래시 · 다크 아카이브 스냅',
-    badge: 'NIGHT 추천',
-  },
-];
-
 const LOOKBOOK_FIT_TARGETS: { id: LookbookFitTarget; label: string }[] = [
-  { id: 'crop_fit', label: '핀터레스트 크롭 핏' },
-  { id: 'female', label: '여성 모델' },
-  { id: 'male', label: '남성 모델' },
+  { id: 'male', label: '남성 모델 전신샷' },
+  { id: 'female', label: '여성 모델 전신샷' },
+  { id: 'crop_fit', label: '턱 아래 크롭샷' },
   { id: 'my_photo', label: '내 사진 피팅' },
 ];
 
@@ -827,11 +797,9 @@ export default function AuraFitClient() {
     null
   );
 
-  // 5단계: 핀터레스트 Style-Lock AI 실사 화보 & 가상 피팅 스튜디오 상태
-  const [lookbookPreset, setLookbookPreset] =
-    useState<LookbookPresetId>('editorial_street');
+  // 5단계: 화이트 호리존 스튜디오 AI 클린 모델샷 & 가상 피팅 상태
   const [lookbookFitTarget, setLookbookFitTarget] =
-    useState<LookbookFitTarget>('crop_fit');
+    useState<LookbookFitTarget>('male');
   const [userTryOnPhoto, setUserTryOnPhoto] = useState<string>('');
   const [userTryOnInfo, setUserTryOnInfo] = useState<string>('');
   const [autoShootLookbook, setAutoShootLookbook] = useState<boolean>(true);
@@ -943,7 +911,6 @@ export default function AuraFitClient() {
         const dark = Boolean(JSON.parse(savedTheme));
         setIsDarkMode(dark);
         setSelectedGenre(dark ? '펑크' : '미니멀');
-        setLookbookPreset(dark ? 'underground_flash' : 'editorial_street');
       }
 
       const savedWardrobe = localStorage.getItem(STORAGE_KEYS.WARDROBE);
@@ -1444,7 +1411,6 @@ export default function AuraFitClient() {
     const nextDark = !isDarkMode;
     setIsDarkMode(nextDark);
     setSelectedGenre(nextDark ? darkGenres[0].id : lightGenres[0].id);
-    setLookbookPreset(nextDark ? 'underground_flash' : 'editorial_street');
     showToast(
       nextDark
         ? '🌑 NIGHT 모드 전환: 언더그라운드 서브컬처(펑크·고스·로리타) 엔진 활성화'
@@ -1728,7 +1694,6 @@ export default function AuraFitClient() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           isDarkMode,
-          stylePreset: lookbookPreset,
           fitTarget: lookbookFitTarget,
           activeGenre: overrideGenre || stylistResult?.genre || selectedGenre,
           selectedDetails: activeDetails,
@@ -1753,14 +1718,15 @@ export default function AuraFitClient() {
                 ...prev,
                 lookbookImage: crispWebp.dataUrl,
                 lookbookEngine:
-                  json.engineLabel || 'Gemini 2.5 Flash Image · Style-Lock',
-                lookbookPresetLabel: json.presetLabel || '핀터레스트 에디토리얼',
-                apiBadge: '📸 AI 실사 착장 화보 완성',
+                  json.engineLabel || 'Gemini 2.5 Flash Image · White Studio',
+                lookbookPresetLabel:
+                  json.presetLabel || '화이트 스튜디오 모델샷',
+                apiBadge: '📸 화이트 스튜디오 AI 모델샷 완성',
               }
             : prev
         );
         setLookbookViewMode('photo');
-        showToast('📸 핀터레스트 무드 AI 실사 착장 화보가 완성되었습니다!');
+        showToast('📸 깔끔한 화이트 스튜디오 AI 착장 모델샷이 완성되었습니다!');
       } else if (json?.missingKey) {
         setLookbookMissingKey(true);
         setLookbookStatusHint(
@@ -3368,7 +3334,7 @@ export default function AuraFitClient() {
                   )}
                 </div>
 
-                {/* 5단계: 핀터레스트 무드 고정(Style-Lock) & 내 사진 가상 피팅 스튜디오 */}
+                {/* 5단계: 화이트 호리존 스튜디오 클린 모델샷 & 가상 피팅 */}
                 <div
                   className={`rounded-2xl border p-4 space-y-3.5 transition-colors ${
                     isDarkMode
@@ -3380,66 +3346,32 @@ export default function AuraFitClient() {
                     <div className="flex items-center gap-1.5">
                       <Camera className="w-4 h-4 text-rose-500" />
                       <span className="text-xs font-extrabold">
-                        핀터레스트 Style-Lock 화보 스튜디오
+                        화이트 스튜디오 AI 모델샷
                       </span>
                     </div>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-500">
-                      STEP 5 AI VTON
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600">
+                      WHITE STUDIO 고정
                     </span>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <p className="text-[11px] font-semibold text-zinc-500">
-                      1. 화보 촬영 무드 고정 (Style-Lock)
+                  <div
+                    className={`p-2.5 rounded-xl border text-[11px] leading-relaxed ${
+                      isDarkMode
+                        ? 'border-zinc-800 bg-zinc-950 text-zinc-300'
+                        : 'border-zinc-200 bg-zinc-50 text-zinc-600'
+                    }`}
+                  >
+                    <p className="font-bold text-xs mb-0.5">
+                      ✓ 순백색 호리존 스튜디오 배경 고정
                     </p>
-                    <div className="space-y-1.5">
-                      {LOOKBOOK_STYLE_PRESETS.map((preset) => {
-                        const active = lookbookPreset === preset.id;
-                        return (
-                          <button
-                            key={preset.id}
-                            type="button"
-                            onClick={() => setLookbookPreset(preset.id)}
-                            className={`w-full text-left px-3 py-2 rounded-xl border transition cursor-pointer flex items-center justify-between gap-2 ${
-                              active
-                                ? isDarkMode
-                                  ? 'border-rose-500 bg-rose-950/35 text-white'
-                                  : 'border-zinc-900 bg-zinc-900 text-white'
-                                : isDarkMode
-                                ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-700'
-                                : 'border-zinc-200 bg-zinc-50/70 text-zinc-700 hover:border-zinc-300'
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <p className="text-xs font-bold truncate">
-                                {preset.title}
-                              </p>
-                              <p
-                                className={`text-[10px] truncate ${
-                                  active ? 'opacity-80' : 'text-zinc-400'
-                                }`}
-                              >
-                                {preset.desc}
-                              </p>
-                            </div>
-                            <span
-                              className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                active
-                                  ? 'bg-rose-500 text-white'
-                                  : 'bg-zinc-500/15 text-zinc-500'
-                              }`}
-                            >
-                              {preset.badge}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <p className="text-[10px] opacity-80">
+                      거리 배경이나 소품 없이 깔끔한 흰색 스튜디오 조명에서 선택한 의류의 핏·원단·컬러만 선명하게 촬영합니다.
+                    </p>
                   </div>
 
                   <div className="space-y-1.5">
                     <p className="text-[11px] font-semibold text-zinc-500">
-                      2. 착장 모델 · 내 전신 사진 가상 피팅
+                      착장 모델 선택 (내 사진 피팅 지원)
                     </p>
                     <div className="grid grid-cols-2 gap-1.5">
                       {LOOKBOOK_FIT_TARGETS.map((t) => {
@@ -3529,7 +3461,7 @@ export default function AuraFitClient() {
 
                   <label className="flex items-center justify-between gap-2 pt-1 border-t border-zinc-200/40 cursor-pointer select-none">
                     <span className="text-[11px] font-semibold opacity-85">
-                      코디 생성 시 AI 실사 화보 자동 촬영
+                      코디 생성 시 화이트 스튜디오 모델샷 자동 촬영
                     </span>
                     <input
                       type="checkbox"
@@ -3765,20 +3697,24 @@ export default function AuraFitClient() {
                     <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-stretch">
                       <div
                         className={`md:col-span-5 relative rounded-xl overflow-hidden min-h-[410px] border flex flex-col justify-between p-4 ${
-                          isDarkMode
+                          stylistResult.lookbookImage &&
+                          lookbookViewMode === 'photo'
+                            ? 'bg-white border-zinc-200 text-zinc-900'
+                            : isDarkMode
                             ? 'bg-gradient-to-b from-zinc-950 via-zinc-900 to-rose-950/40 border-rose-900/50'
-                            : 'bg-gradient-to-b from-stone-100 to-zinc-200/70 border-zinc-200'
+                            : 'bg-gradient-to-b from-stone-50 to-zinc-100 border-zinc-200'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-1.5 z-20">
-                          <span className="px-2 py-0.5 rounded bg-black/80 text-white text-[10px] font-semibold backdrop-blur-sm flex items-center gap-1">
+                          <span className="px-2 py-0.5 rounded bg-zinc-900 text-white text-[10px] font-semibold flex items-center gap-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />{' '}
                             {stylistResult.lookbookImage
-                              ? stylistResult.lookbookPresetLabel || 'AI 착장 화보'
-                              : 'Style-Lock 화보 스튜디오'}
+                              ? stylistResult.lookbookPresetLabel ||
+                                '화이트 스튜디오 모델샷'
+                              : 'WHITE STUDIO 모델샷'}
                           </span>
                           {stylistResult.lookbookImage ? (
-                            <div className="flex items-center gap-1 bg-black/75 backdrop-blur-sm p-0.5 rounded-lg">
+                            <div className="flex items-center gap-1 bg-zinc-900 p-0.5 rounded-lg">
                               <button
                                 type="button"
                                 onClick={() => setLookbookViewMode('photo')}
@@ -3788,7 +3724,7 @@ export default function AuraFitClient() {
                                     : 'text-zinc-300 hover:text-white'
                                 }`}
                               >
-                                실사 화보
+                                모델샷
                               </button>
                               <button
                                 type="button"
@@ -3803,8 +3739,8 @@ export default function AuraFitClient() {
                               </button>
                             </div>
                           ) : (
-                            <span className="text-[10px] font-mono text-zinc-600 bg-white/85 px-1.5 py-0.5 rounded">
-                              OBLIQUE STUDIO
+                            <span className="text-[10px] font-mono text-zinc-600 bg-white/90 px-1.5 py-0.5 rounded border border-zinc-200/70">
+                              WHITE STUDIO
                             </span>
                           )}
                         </div>
@@ -3814,16 +3750,10 @@ export default function AuraFitClient() {
                             <div className="w-11 h-11 border-4 border-rose-500/30 border-t-rose-500 rounded-full animate-spin" />
                             <div className="space-y-1">
                               <p className="text-xs font-extrabold">
-                                AI 포토그래퍼가 실사 착장 화보를 현상 중입니다...
+                                화이트 스튜디오에서 AI 착장 모델샷을 촬영 중입니다...
                               </p>
                               <p className="text-[11px] opacity-75">
-                                선택하신 의류 {stylistResult.items.length}벌의 핏·컬러·디테일을{' '}
-                                {
-                                  LOOKBOOK_STYLE_PRESETS.find(
-                                    (p) => p.id === lookbookPreset
-                                  )?.title
-                                }{' '}
-                                무드로 합성하고 있습니다 (약 8~15초)
+                                선택하신 의류 {stylistResult.items.length}벌의 핏·컬러·디테일을 깔끔한 순백색 호리존 조명에서 합성하고 있습니다 (약 8~15초)
                               </p>
                             </div>
                           </div>
@@ -3837,7 +3767,7 @@ export default function AuraFitClient() {
                                 )
                               }
                               title="터치하면 원본 해상도로 크게 확대됩니다"
-                              className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-white/20 shadow-lg bg-zinc-900 cursor-zoom-in group"
+                              className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-zinc-200 shadow-sm bg-white cursor-zoom-in group"
                             >
                               <img
                                 referrerPolicy="no-referrer"
@@ -3998,9 +3928,9 @@ export default function AuraFitClient() {
                               <button
                                 type="button"
                                 onClick={() => generateLookbookPhoto()}
-                                className="w-full py-2.5 px-3 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-500 transition flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
+                                className="w-full py-2.5 px-3 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 transition flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
                               >
-                                <Camera className="w-3.5 h-3.5" /> 핀터레스트 무드 AI 실사 화보 촬영하기
+                                <Camera className="w-3.5 h-3.5" /> 화이트 스튜디오 AI 모델샷 촬영하기
                               </button>
 
                               {lookbookStatusHint && (
@@ -4397,7 +4327,7 @@ export default function AuraFitClient() {
                           setZoomLookbookUrl(look.lookbookImage || '')
                         }
                         title="터치하면 AI 착장 화보를 크게 확대합니다"
-                        className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-zinc-200/40 bg-zinc-900 cursor-zoom-in group"
+                        className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-zinc-200 bg-white cursor-zoom-in group"
                       >
                         <img
                           referrerPolicy="no-referrer"
@@ -5794,12 +5724,12 @@ export default function AuraFitClient() {
                 </a>
               </div>
               <p className="text-[11px] text-zinc-500 leading-relaxed">
-                Vercel 환경변수에 <code className="px-1 py-0.5 rounded bg-zinc-100 font-mono">GEMINI_API_KEY</code> 하나만 등록하면 AI 코디 노트와 핀터레스트 실사 착장 화보·내 사진 가상 피팅이 모든 기기에서 자동 작동합니다. 배포 전 즉시 테스트하려면 아래 칸에 입력해 보세요.
+                Vercel 환경변수에 <code className="px-1 py-0.5 rounded bg-zinc-100 font-mono">GEMINI_API_KEY</code> 하나만 등록하면 AI 코디 노트와 화이트 스튜디오 클린 모델샷·내 사진 가상 피팅이 모든 기기에서 자동 작동합니다. 배포 전 즉시 테스트하려면 아래 칸에 입력해 보세요.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-zinc-600 mb-1">
-                    Gemini API Key (코디 분석 + Style-Lock 실사 화보 통합)
+                    Gemini API Key (코디 분석 + 화이트 스튜디오 모델샷 통합)
                   </label>
                   <input
                     type="password"
@@ -6007,7 +5937,7 @@ export default function AuraFitClient() {
           >
             <div className="flex items-center justify-between px-1 text-white">
               <span className="text-xs font-bold flex items-center gap-1.5">
-                <Camera className="w-3.5 h-3.5 text-rose-500" /> OBLIQUE Style-Lock 화보 뷰어
+                <Camera className="w-3.5 h-3.5 text-rose-500" /> OBLIQUE 화이트 스튜디오 모델샷 뷰어
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -6032,7 +5962,7 @@ export default function AuraFitClient() {
               referrerPolicy="no-referrer"
               src={zoomLookbookUrl}
               alt="OBLIQUE AI 착장 화보 확대"
-              className="w-full max-h-[78vh] object-contain rounded-xl bg-black"
+              className="w-full max-h-[78vh] object-contain rounded-xl bg-white"
             />
           </div>
         </div>
