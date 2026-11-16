@@ -40,6 +40,8 @@ import {
 
 type CategoryType = '아우터' | '상의' | '하의' | '신발' | '악세사리';
 type ClothStatus = '보유 중' | '구매 예정';
+type PhotoSideType = 'auto' | 'front' | 'back';
+type LookbookPoseAngle = 'front' | 'back';
 type MainTab = 'wardrobe' | 'stylist' | 'community' | 'saved';
 type ProfileSubTab = 'closet' | 'style' | 'inbox';
 
@@ -50,6 +52,8 @@ interface ClothItem {
   season: string;
   status: ClothStatus;
   sourceUrl?: string;
+  photoSide?: PhotoSideType;
+  extraImages?: string[];
   image: string;
 }
 
@@ -106,6 +110,8 @@ interface UrlPreviewData {
   season: string;
   image: string;
   rawImageUrl?: string;
+  galleryUrls?: string[];
+  galleryDataUrls?: string[];
   autoExtracted?: boolean;
 }
 
@@ -742,6 +748,61 @@ const SLOT_CATEGORIES: { key: CategoryType; icon: string; label: string }[] = [
   { key: '악세사리', icon: '⛓️', label: '악세사리' },
 ];
 
+function encodeWardrobeSourceMeta(
+  cleanUrl?: string,
+  photoSide?: PhotoSideType,
+  extraImages?: string[]
+): string {
+  const base = String(cleanUrl || '')
+    .split('#oblique=')[0]
+    .trim();
+  const side = photoSide && photoSide !== 'auto' ? photoSide : undefined;
+  const extras = Array.isArray(extraImages)
+    ? extraImages
+        .filter((u) => typeof u === 'string' && u.length > 0 && u.length < 2200)
+        .slice(0, 4)
+    : [];
+  if (!side && extras.length === 0) {
+    return base;
+  }
+  const payload = encodeURIComponent(
+    JSON.stringify({
+      ...(side ? { side } : {}),
+      ...(extras.length > 0 ? { extra: extras } : {}),
+    })
+  );
+  return `${base}#oblique=${payload}`;
+}
+
+function decodeWardrobeSourceMeta(rawSourceUrl?: string): {
+  cleanUrl: string;
+  photoSide: PhotoSideType;
+  extraImages: string[];
+} {
+  const raw = String(rawSourceUrl || '');
+  const idx = raw.indexOf('#oblique=');
+  if (idx === -1) {
+    return { cleanUrl: raw.trim(), photoSide: 'auto', extraImages: [] };
+  }
+  const cleanUrl = raw.slice(0, idx).trim();
+  const encoded = raw.slice(idx + '#oblique='.length);
+  try {
+    const parsed = JSON.parse(decodeURIComponent(encoded));
+    const photoSide: PhotoSideType =
+      parsed?.side === 'front' || parsed?.side === 'back'
+        ? parsed.side
+        : 'auto';
+    const extraImages: string[] = Array.isArray(parsed?.extra)
+      ? parsed.extra.filter(
+          (u: unknown) => typeof u === 'string' && u.length > 0
+        )
+      : [];
+    return { cleanUrl, photoSide, extraImages };
+  } catch {
+    return { cleanUrl, photoSide: 'auto', extraImages: [] };
+  }
+}
+
 function formatRelativeTime(iso?: string): string {
   if (!iso) return '방금 전';
   const diffSec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -800,6 +861,8 @@ export default function AuraFitClient() {
   // 5단계: 화이트 호리존 스튜디오 AI 클린 모델샷 & 가상 피팅 상태
   const [lookbookFitTarget, setLookbookFitTarget] =
     useState<LookbookFitTarget>('male');
+  const [lookbookPoseAngle, setLookbookPoseAngle] =
+    useState<LookbookPoseAngle>('front');
   const [userTryOnPhoto, setUserTryOnPhoto] = useState<string>('');
   const [userTryOnInfo, setUserTryOnInfo] = useState<string>('');
   const [autoShootLookbook, setAutoShootLookbook] = useState<boolean>(true);
@@ -833,7 +896,10 @@ export default function AuraFitClient() {
   const [photoCompressInfo, setPhotoCompressInfo] = useState<string>('');
   const [isUploadingCloth, setIsUploadingCloth] = useState<boolean>(false);
 
-  // 등록된 의류 정보(카테고리·이름·계절·보유상태) 사후 수정 모달 상태
+  const [photoSideInput, setPhotoSideInput] = useState<PhotoSideType>('auto');
+  const [photoSourceUrlInput, setPhotoSourceUrlInput] = useState<string>('');
+
+  // 등록된 의류 정보(카테고리·이름·계절·보유상태·앞뒷면·다각도 링크) 사후 수정 모달 상태
   const [editingCloth, setEditingCloth] = useState<ClothItem | null>(null);
   const [editClothName, setEditClothName] = useState<string>('');
   const [editClothCategory, setEditClothCategory] =
@@ -841,6 +907,14 @@ export default function AuraFitClient() {
   const [editClothSeason, setEditClothSeason] = useState<string>('사계절');
   const [editClothStatus, setEditClothStatus] =
     useState<ClothStatus>('보유 중');
+  const [editClothSourceUrl, setEditClothSourceUrl] = useState<string>('');
+  const [editClothPhotoSide, setEditClothPhotoSide] =
+    useState<PhotoSideType>('auto');
+  const [editClothExtraImages, setEditClothExtraImages] = useState<string[]>(
+    []
+  );
+  const [isUploadingExtraAngle, setIsUploadingExtraAngle] =
+    useState<boolean>(false);
   const [isSavingClothEdit, setIsSavingClothEdit] = useState<boolean>(false);
 
   const [shopUrlInput, setShopUrlInput] = useState<string>('');
@@ -1023,15 +1097,20 @@ export default function AuraFitClient() {
               )
           );
 
-          const mapped: ClothItem[] = userRealRows.map((r) => ({
-            id: Number(r.id),
-            name: r.name,
-            category: r.category as CategoryType,
-            season: r.season,
-            status: r.status as ClothStatus,
-            sourceUrl: r.source_url || '',
-            image: r.image_url,
-          }));
+          const mapped: ClothItem[] = userRealRows.map((r) => {
+            const meta = decodeWardrobeSourceMeta(r.source_url);
+            return {
+              id: Number(r.id),
+              name: r.name,
+              category: r.category as CategoryType,
+              season: r.season,
+              status: r.status as ClothStatus,
+              sourceUrl: meta.cleanUrl,
+              photoSide: meta.photoSide,
+              extraImages: meta.extraImages,
+              image: r.image_url,
+            };
+          });
           setWardrobe(mapped);
           setSelectedClothIds((prev) =>
             prev.filter((id) => mapped.some((m) => m.id === id))
@@ -1120,15 +1199,20 @@ export default function AuraFitClient() {
           .map((prof) => {
             const uCloset: ClothItem[] = (allPubItems || [])
               .filter((w) => w.user_id === prof.id)
-              .map((w) => ({
-                id: Number(w.id),
-                name: w.name,
-                category: w.category as CategoryType,
-                season: w.season,
-                status: w.status as ClothStatus,
-                sourceUrl: w.source_url || '',
-                image: w.image_url,
-              }));
+              .map((w) => {
+                const meta = decodeWardrobeSourceMeta(w.source_url);
+                return {
+                  id: Number(w.id),
+                  name: w.name,
+                  category: w.category as CategoryType,
+                  season: w.season,
+                  status: w.status as ClothStatus,
+                  sourceUrl: meta.cleanUrl,
+                  photoSide: meta.photoSide,
+                  extraImages: meta.extraImages,
+                  image: w.image_url,
+                };
+              });
             const uProps: Proposal[] = (allProps || [])
               .filter((p) => p.target_user_id === prof.id)
               .map((p) => ({
@@ -1657,24 +1741,39 @@ export default function AuraFitClient() {
       // Vercel 서버리스 4.5MB 요청 한도 초과 방지를 위해 각 참조 이미지를 768px WebP로 경량화
       const preparedGarments = await Promise.all(
         sourceItems.map(async (it) => {
+          let mainImg = it.image;
           if (
-            it.image &&
-            it.image.startsWith('data:image/') &&
-            !it.image.startsWith('data:image/svg')
+            mainImg &&
+            mainImg.startsWith('data:image/') &&
+            !mainImg.startsWith('data:image/svg')
           ) {
-            const small = await compressDataUrlToWebP(it.image, 768, 0.82);
-            return {
-              name: it.name,
-              category: it.category,
-              status: it.status,
-              image: small.dataUrl,
-            };
+            const small = await compressDataUrlToWebP(mainImg, 768, 0.82);
+            mainImg = small.dataUrl;
           }
+          const rawExtras = Array.isArray(it.extraImages)
+            ? it.extraImages.slice(0, 3)
+            : [];
+          const preparedExtras = await Promise.all(
+            rawExtras.map(async (ex) => {
+              if (
+                ex &&
+                ex.startsWith('data:image/') &&
+                !ex.startsWith('data:image/svg')
+              ) {
+                const smallEx = await compressDataUrlToWebP(ex, 720, 0.8);
+                return smallEx.dataUrl;
+              }
+              return ex;
+            })
+          );
           return {
             name: it.name,
             category: it.category,
             status: it.status,
-            image: it.image,
+            image: mainImg,
+            sourceUrl: it.sourceUrl || '',
+            photoSide: it.photoSide || 'auto',
+            extraImages: preparedExtras.filter(Boolean),
           };
         })
       );
@@ -1695,6 +1794,7 @@ export default function AuraFitClient() {
         body: JSON.stringify({
           isDarkMode,
           fitTarget: lookbookFitTarget,
+          poseAngle: lookbookPoseAngle,
           activeGenre: overrideGenre || stylistResult?.genre || selectedGenre,
           selectedDetails: activeDetails,
           garments: preparedGarments,
@@ -1909,6 +2009,13 @@ export default function AuraFitClient() {
   const insertClothItem = async (
     draft: Omit<ClothItem, 'id'>
   ): Promise<ClothItem> => {
+    const cleanSource = (draft.sourceUrl || '').split('#oblique=')[0].trim();
+    const encodedSource = encodeWardrobeSourceMeta(
+      cleanSource,
+      draft.photoSide,
+      draft.extraImages
+    );
+
     if (authUser && supabaseClient) {
       const { data, error } = await supabaseClient
         .from('wardrobe_items')
@@ -1918,26 +2025,30 @@ export default function AuraFitClient() {
           category: draft.category,
           season: draft.season,
           status: draft.status,
-          source_url: draft.sourceUrl || '',
+          source_url: encodedSource,
           image_url: draft.image,
         })
         .select('*')
         .single();
 
       if (!error && data) {
+        const meta = decodeWardrobeSourceMeta(data.source_url);
         return {
           id: Number(data.id),
           name: data.name,
           category: data.category as CategoryType,
           season: data.season,
           status: data.status as ClothStatus,
-          sourceUrl: data.source_url || '',
+          sourceUrl: meta.cleanUrl,
+          photoSide: meta.photoSide,
+          extraImages: meta.extraImages,
           image: data.image_url,
         };
       }
     }
     return {
       ...draft,
+      sourceUrl: cleanSource,
       id: Date.now(),
     };
   };
@@ -1983,7 +2094,8 @@ export default function AuraFitClient() {
         category: photoCategory,
         season: photoSeason,
         status: photoStatus,
-        sourceUrl: '',
+        sourceUrl: photoSourceUrlInput.trim(),
+        photoSide: photoSideInput,
         image: finalImageUrl,
       });
 
@@ -1992,6 +2104,8 @@ export default function AuraFitClient() {
       setPhotoDataUrl('');
       setPhotoBlob(null);
       setPhotoCompressInfo('');
+      setPhotoSideInput('auto');
+      setPhotoSourceUrlInput('');
       setUploadModalOpen(false);
       showToast(
         storedInBucket
@@ -2086,6 +2200,15 @@ export default function AuraFitClient() {
           'URL ITEM'
         );
 
+        const galleryUrls = Array.isArray(json.galleryUrls)
+          ? json.galleryUrls.filter((u: unknown) => typeof u === 'string' && u)
+          : [];
+        const galleryDataUrls = Array.isArray(json.galleryDataUrls)
+          ? json.galleryDataUrls.filter(
+              (u: unknown) => typeof u === 'string' && u
+            )
+          : [];
+
         setShopUrlInput(cleanPageUrl);
         setUrlPreview({
           url: cleanPageUrl,
@@ -2096,6 +2219,8 @@ export default function AuraFitClient() {
           season: json.season || '사계절',
           image: readyDisplayUrl || fallbackSvg,
           rawImageUrl: readyDisplayUrl || fallbackSvg,
+          galleryUrls,
+          galleryDataUrls,
           autoExtracted: true,
         });
         setIsFetchingUrl(false);
@@ -2200,12 +2325,18 @@ export default function AuraFitClient() {
         }
       }
 
+      const extraAngleUrls = Array.isArray(urlPreview.galleryUrls)
+        ? urlPreview.galleryUrls.slice(0, 4)
+        : [];
+
       const created = await insertClothItem({
         name: cleanName,
         category: urlPreview.category,
         season: urlPreview.season,
         status: urlStatus,
         sourceUrl: urlPreview.url,
+        photoSide: 'auto',
+        extraImages: extraAngleUrls,
         image: finalImageUrl,
       });
 
@@ -2253,6 +2384,82 @@ export default function AuraFitClient() {
     setEditClothCategory(item.category);
     setEditClothSeason(item.season || '사계절');
     setEditClothStatus(item.status || '보유 중');
+    setEditClothSourceUrl(item.sourceUrl || '');
+    setEditClothPhotoSide(item.photoSide || 'auto');
+    setEditClothExtraImages(
+      Array.isArray(item.extraImages) ? item.extraImages : []
+    );
+  };
+
+  const handleSelectUrlGalleryThumb = async (dataOrHttpUrl: string) => {
+    if (!urlPreview) return;
+    try {
+      if (dataOrHttpUrl.startsWith('data:image/')) {
+        const respBlob = await (await fetch(dataOrHttpUrl)).blob();
+        const f = new File([respBlob], 'angle.jpg', {
+          type: respBlob.type || 'image/jpeg',
+        });
+        const comp = await compressImageToWebP(f, 1080, 0.84);
+        setUrlCustomBlob(comp.blob);
+        setUrlCustomExt(comp.ext);
+        setUrlCustomMime(comp.mimeType);
+        setUrlPreview({
+          ...urlPreview,
+          image: comp.dataUrl,
+          rawImageUrl: comp.dataUrl,
+        });
+        showToast('선택한 각도 사진이 옷장 카드 대표 썸네일로 지정되었습니다!');
+      } else {
+        setUrlPreview({
+          ...urlPreview,
+          image: dataOrHttpUrl,
+          rawImageUrl: dataOrHttpUrl,
+        });
+      }
+    } catch {
+      showToast('썸네일 전환 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleUploadExtraAngleInEdit = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingExtraAngle(true);
+    try {
+      const compressed = await compressImageToWebP(file, 1024, 0.84);
+      let finalExtraUrl = compressed.dataUrl;
+
+      if (authUser && supabaseClient) {
+        const uniqueName = `extra_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 7)}.${compressed.ext}`;
+        const storagePath = `${authUser.id}/${uniqueName}`;
+        const { error: upErr } = await supabaseClient.storage
+          .from(STORAGE_BUCKET)
+          .upload(storagePath, compressed.blob, {
+            contentType: compressed.mimeType,
+            cacheControl: '3600',
+            upsert: false,
+          });
+        if (!upErr) {
+          const { data: pubData } = supabaseClient.storage
+            .from(STORAGE_BUCKET)
+            .getPublicUrl(storagePath);
+          if (pubData?.publicUrl) {
+            finalExtraUrl = pubData.publicUrl;
+          }
+        }
+      }
+
+      setEditClothExtraImages((prev) => [...prev.slice(0, 2), finalExtraUrl]);
+      showToast('보조 각도(앞·뒤) 사진이 추가되었습니다! 저장 버튼을 눌러 확정하세요.');
+    } catch {
+      showToast('보조 사진을 처리하지 못했습니다.');
+    } finally {
+      setIsUploadingExtraAngle(false);
+    }
   };
 
   const handleSaveClothEdit = async (e: React.FormEvent) => {
@@ -2260,6 +2467,12 @@ export default function AuraFitClient() {
     if (!editingCloth || isSavingClothEdit) return;
 
     const cleanName = editClothName.trim() || editingCloth.name;
+    const cleanSource = editClothSourceUrl.split('#oblique=')[0].trim();
+    const encodedSource = encodeWardrobeSourceMeta(
+      cleanSource,
+      editClothPhotoSide,
+      editClothExtraImages
+    );
     setIsSavingClothEdit(true);
 
     try {
@@ -2271,6 +2484,7 @@ export default function AuraFitClient() {
             category: editClothCategory,
             season: editClothSeason,
             status: editClothStatus,
+            source_url: encodedSource,
           })
           .eq('id', editingCloth.id)
           .eq('user_id', authUser.id);
@@ -2290,6 +2504,9 @@ export default function AuraFitClient() {
                 category: editClothCategory,
                 season: editClothSeason,
                 status: editClothStatus,
+                sourceUrl: cleanSource,
+                photoSide: editClothPhotoSide,
+                extraImages: editClothExtraImages,
               }
             : w
         )
@@ -3362,16 +3579,54 @@ export default function AuraFitClient() {
                     }`}
                   >
                     <p className="font-bold text-xs mb-0.5">
-                      ✓ 순백색 호리존 스튜디오 배경 고정
+                      ✓ 순백색 스튜디오 고정 + 쇼핑몰 다각도(앞·옆·뒤) 자동 인식
                     </p>
                     <p className="text-[10px] opacity-80">
-                      거리 배경이나 소품 없이 깔끔한 흰색 스튜디오 조명에서 선택한 의류의 핏·원단·컬러만 선명하게 촬영합니다.
+                      링크로 등록된 옷은 연결된 사이트의 앞·옆·뒷면 사진을 서버가 함께 읽어들여, 등판(뒷면) 프린트가 앞가슴에 잘못 찍히는 현상을 방지합니다.
                     </p>
                   </div>
 
                   <div className="space-y-1.5">
                     <p className="text-[11px] font-semibold text-zinc-500">
-                      착장 모델 선택 (내 사진 피팅 지원)
+                      1. 촬영 방향 (앞핏 vs 등판·백프린트)
+                    </p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setLookbookPoseAngle('front')}
+                        className={`py-2 px-2.5 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
+                          lookbookPoseAngle === 'front'
+                            ? isDarkMode
+                              ? 'border-rose-500 bg-rose-600 text-white'
+                              : 'border-zinc-900 bg-zinc-900 text-white'
+                            : isDarkMode
+                            ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-700'
+                            : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'
+                        }`}
+                      >
+                        정면 모델샷 (앞핏)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLookbookPoseAngle('back')}
+                        className={`py-2 px-2.5 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
+                          lookbookPoseAngle === 'back'
+                            ? isDarkMode
+                              ? 'border-rose-500 bg-rose-600 text-white'
+                              : 'border-zinc-900 bg-zinc-900 text-white'
+                            : isDarkMode
+                            ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-700'
+                            : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'
+                        }`}
+                      >
+                        뒷모습 모델샷 (등판 강조)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-semibold text-zinc-500">
+                      2. 착장 모델 선택 (내 사진 피팅 지원)
                     </p>
                     <div className="grid grid-cols-2 gap-1.5">
                       {LOOKBOOK_FIT_TARGETS.map((t) => {
@@ -4924,6 +5179,46 @@ export default function AuraFitClient() {
                     </select>
                   </div>
                 </div>
+                <div className="p-3 rounded-xl bg-zinc-50 border border-zinc-200/80 space-y-2.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-zinc-700 mb-1">
+                      올리신 사진의 앞·뒤 방향 (AI 앞뒤 착각 방지)
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {[
+                        { id: 'auto' as PhotoSideType, label: '자동 판별' },
+                        { id: 'front' as PhotoSideType, label: '앞면 사진' },
+                        { id: 'back' as PhotoSideType, label: '뒷면(등판) 사진' },
+                      ].map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setPhotoSideInput(opt.id)}
+                          className={`py-1.5 px-2 rounded-lg border text-[11px] font-semibold transition cursor-pointer ${
+                            photoSideInput === opt.id
+                              ? 'border-zinc-900 bg-zinc-900 text-white'
+                              : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-400'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-zinc-700 mb-1">
+                      연결할 상품 페이지 링크 (선택 · 입력 시 앞·옆·뒷면 자동 수집)
+                    </label>
+                    <input
+                      type="url"
+                      value={photoSourceUrlInput}
+                      onChange={(e) => setPhotoSourceUrlInput(e.target.value)}
+                      placeholder="https://kream.co.kr/products/... (선택 사항)"
+                      className="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
+                    />
+                  </div>
+                </div>
+
                 <button
                   type="submit"
                   disabled={isUploadingCloth}
@@ -5068,6 +5363,40 @@ export default function AuraFitClient() {
                         </p>
                       </div>
                     </div>
+
+                    {urlPreview.galleryDataUrls &&
+                      urlPreview.galleryDataUrls.length >= 2 && (
+                        <div className="p-2.5 rounded-lg bg-white border border-emerald-200/80 space-y-1.5">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-[10px] font-bold text-emerald-700">
+                              ✓ 앞·옆·뒷면 다각도 사진 {urlPreview.galleryDataUrls.length}장 확보 (AI 생성 시 전체 반영)
+                            </span>
+                            <span className="text-[9px] text-zinc-400">
+                              터치해 대표컷 변경 가능
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
+                            {urlPreview.galleryDataUrls.map((gImg, gIdx) => (
+                              <button
+                                key={gIdx}
+                                type="button"
+                                onClick={() => handleSelectUrlGalleryThumb(gImg)}
+                                className="relative w-12 h-14 rounded-md overflow-hidden border border-zinc-200 hover:border-rose-500 shrink-0 bg-white cursor-pointer"
+                              >
+                                <img
+                                  referrerPolicy="no-referrer"
+                                  src={gImg}
+                                  alt={`각도 ${gIdx + 1}`}
+                                  className="w-full h-full object-cover"
+                                />
+                                <span className="absolute bottom-0 right-0 px-1 bg-black/70 text-white text-[8px] font-bold">
+                                  #{gIdx + 1}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                     <div className="grid grid-cols-3 gap-2">
                       <div>
@@ -5795,7 +6124,7 @@ export default function AuraFitClient() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-white text-zinc-900 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl"
+            className="bg-white text-zinc-900 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl max-h-[92vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
               <div>
@@ -5901,6 +6230,100 @@ export default function AuraFitClient() {
                     <option value="보유 중">✅ 이미 보유 중</option>
                     <option value="구매 예정">✨ 구매 예정 (위시템)</option>
                   </select>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-zinc-50 border border-zinc-200/80 space-y-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-700 mb-1">
+                    대표 사진 앞·뒤 방향 지정 (뒷면 사진을 앞면으로 착각 방지)
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[
+                      { id: 'auto' as PhotoSideType, label: '자동 (다각도)' },
+                      { id: 'front' as PhotoSideType, label: '앞면 사진' },
+                      { id: 'back' as PhotoSideType, label: '뒷면(등판) 사진' },
+                    ].map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setEditClothPhotoSide(opt.id)}
+                        className={`py-1.5 px-2 rounded-lg border text-[11px] font-semibold transition cursor-pointer ${
+                          editClothPhotoSide === opt.id
+                            ? 'border-rose-500 bg-rose-600 text-white'
+                            : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-400'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-700 mb-1">
+                    연결된 쇼핑몰 링크 (입력 시 AI가 사이트의 앞·옆·뒷면 사진 자동 참조)
+                  </label>
+                  <input
+                    type="url"
+                    value={editClothSourceUrl}
+                    onChange={(e) => setEditClothSourceUrl(e.target.value)}
+                    placeholder="https://kream.co.kr/products/... 또는 무신사·29CM 링크"
+                    className="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] font-bold text-zinc-700">
+                      앞·뒤 보조 각도 사진 직접 추가 ({editClothExtraImages.length}/3)
+                    </span>
+                    {editClothExtraImages.length < 3 && (
+                      <label className="text-[10px] font-bold text-indigo-600 hover:underline cursor-pointer">
+                        {isUploadingExtraAngle
+                          ? '업로드 중...'
+                          : '+ 반대편(앞/뒤) 사진 추가'}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleUploadExtraAngleInEdit}
+                          className="hidden"
+                        />
+                      </label>
+                    )}
+                  </div>
+                  {editClothExtraImages.length > 0 ? (
+                    <div className="flex items-center gap-2 overflow-x-auto pt-0.5">
+                      {editClothExtraImages.map((exUrl, exIdx) => (
+                        <div
+                          key={exIdx}
+                          className="relative w-12 h-14 rounded-lg overflow-hidden border border-zinc-200 bg-white shrink-0"
+                        >
+                          <img
+                            referrerPolicy="no-referrer"
+                            src={exUrl}
+                            alt={`보조 각도 ${exIdx + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditClothExtraImages((prev) =>
+                                prev.filter((_, idx) => idx !== exIdx)
+                              )
+                            }
+                            className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-black/75 text-white text-[9px] flex items-center justify-center cursor-pointer"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-zinc-400">
+                      쇼핑몰 링크가 없는 의류도 앞면·뒷면 사진을 함께 올려두면 AI가 정확히 구분해 입힙니다.
+                    </p>
+                  )}
                 </div>
               </div>
 

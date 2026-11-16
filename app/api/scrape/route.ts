@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server';
+import {
+  crawlProductMultiAngleUrls,
+  downloadUrlAsInlineData,
+  selectDistinctAngleUrls,
+} from '../../lib/productGallery';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 25;
@@ -59,7 +64,7 @@ function extractAndValidateUrl(rawInput: string): {
   shareHint: string;
 } {
   const trimmed = rawInput.trim();
-  const urlMatch = trimmed.match(/https?:\/\/[^\s"'<>]+/i);
+  const urlMatch = trimmed.match(/https?:\/\/[^\s"'<>#]+/i);
   if (!urlMatch) {
     return { cleanUrl: null, shareHint: '' };
   }
@@ -208,7 +213,6 @@ function isGenericOrBadImage(imgUrl: string): boolean {
   ) {
     return true;
   }
-  // KREAM 소형 브랜드 로고/아이콘 전용 쿼리(?type=s, ?type=s_webp) 배제
   if (/[?&]type=s(?:_webp)?(?:&|$)/i.test(lower)) {
     return true;
   }
@@ -221,14 +225,12 @@ function isLikelyBrandLogoAlt(altText: string, titleHint: string): boolean {
   if (/(로고|logo|brand\s*image|브랜드\s*로고|아이콘)/i.test(cleanAlt)) {
     return true;
   }
-  // 예: alt="반스(Vans)" 또는 alt="Vans" 처럼 짧은 단일 브랜드명만 적힌 경우 (상품명은 3단어 이상)
   if (/^[가-힣a-zA-Z0-9&.\s]{1,14}\([a-zA-Z0-9&.\s]{1,18}\)$/.test(cleanAlt)) {
     return true;
   }
   const altTokens = cleanAlt.split(/\s+/).filter(Boolean);
   const titleTokens = titleHint.trim().split(/\s+/).filter(Boolean);
   if (altTokens.length === 1 && cleanAlt.length <= 14 && titleTokens.length >= 3) {
-    // '썸네일' 같은 갤러리 표시는 제외
     if (!/(썸네일|상품|image|photo)/i.test(cleanAlt)) {
       return true;
     }
@@ -247,11 +249,9 @@ function scoreProductImage(imgUrl: string, altText = '', titleHint = ''): number
   ) {
     score += 55;
   }
-  // KREAM 공식 상품 스튜디오 컷: 구형(p_) 및 신형(a_, d_) 접두어 모두 동일 가산점 부여!
   if (/\/[pad]_[0-9a-f]{16,}\.(?:png|jpe?g|webp)/i.test(lower)) {
     score += 45;
   }
-  // KREAM 대형·중형 상품 대표 썸네일 쿼리(?type=l, ?type=m) 우대
   if (/[?&]type=[lm](?:_webp)?(?:&|$)/i.test(lower)) {
     score += 25;
   }
@@ -264,7 +264,6 @@ function scoreProductImage(imgUrl: string, altText = '', titleHint = ''): number
 
   if (altText) {
     if (isLikelyBrandLogoAlt(altText, titleHint)) {
-      // 브랜드 소개 박스의 로고 이미지(예: Vans 로고) 강력 감점
       score -= 95;
     } else if (titleHint) {
       const titleWords = titleHint
@@ -278,7 +277,6 @@ function scoreProductImage(imgUrl: string, altText = '', titleHint = ''): number
           matchedWords += 1;
         }
       }
-      // 브랜드 첫 단어 1개만이 아니라 상품명 단어 2개 이상 일치할 때 진짜 상품 사진 가산점 부여
       if (matchedWords >= 2) {
         score += 45;
       }
@@ -289,7 +287,6 @@ function scoreProductImage(imgUrl: string, altText = '', titleHint = ''): number
 
 function inferCategory(text: string): CategoryType {
   const t = text.toLowerCase();
-  // 아이웨어(예: Oakley Eye Jacket 등 'jacket'이 모델명에 들어간 선글라스·고글) 우선 판별!
   if (
     /(선글라스|아이웨어|안경|고글|아이\s*자켓|레이싱\s*자켓|스트레이트\s*자켓|eye\s*jacket|racing\s*jacket|straight\s*jacket|sunglasses|eyewear|glasses|goggles)/.test(
       t
@@ -383,6 +380,7 @@ function extractPriceFromText(text: string): string {
 interface ExtractedMeta {
   title: string;
   images: { url: string; score: number }[];
+  orderedHeroGallery: string[];
   price: string;
   extraCategoryText: string;
 }
@@ -390,19 +388,27 @@ interface ExtractedMeta {
 function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
   let title = '';
   const images: { url: string; score: number }[] = [];
+  const orderedHeroGallery: string[] = [];
   let price = '';
   let extraCategoryText = '';
 
-  const pushCandidateImg = (rawUrl: string, bonus = 0, alt = '') => {
+  const pushCandidateImg = (
+    rawUrl: string,
+    bonus = 0,
+    alt = '',
+    inHeroGallery = false
+  ) => {
     const norm = normalizeImageUrl(rawUrl, pageUrl);
     if (!norm) return;
     const sc = scoreProductImage(norm, alt, title) + bonus;
     if (sc > 0) {
       images.push({ url: norm, score: sc });
+      if (inHeroGallery && !isLikelyBrandLogoAlt(alt, title)) {
+        orderedHeroGallery.push(norm);
+      }
     }
   };
 
-  // 1. JSON-LD (Product 스키마 대표 이미지 최우선 추출)
   const ldRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let ldMatch: RegExpExecArray | null;
   while ((ldMatch = ldRegex.exec(html)) !== null) {
@@ -426,7 +432,7 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
             for (let j = 0; j < imgList.length; j++) {
               const entry = imgList[j];
               const u = typeof entry === 'string' ? entry : entry?.url;
-              if (u) pushCandidateImg(u, j === 0 ? 175 : 120);
+              if (u) pushCandidateImg(u, j === 0 ? 175 : 120, '', true);
             }
           }
           if (!price && item.offers) {
@@ -443,7 +449,6 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
     }
   }
 
-  // 2. <meta> 태그 전수 파싱
   const metaMap = new Map<string, string>();
   const metaRegex = /<meta\s+[^>]*>/gi;
   let tagMatch: RegExpExecArray | null;
@@ -479,7 +484,6 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
     }
   }
 
-  // og:image / twitter:image 는 쇼핑몰이 직접 지정한 공식 대표 썸네일이므로 최상위 가산점(+185) 부여!
   const metaImgCandidates = [
     metaMap.get('og:image:secure_url'),
     metaMap.get('og:image'),
@@ -488,27 +492,32 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
   ];
   for (let i = 0; i < metaImgCandidates.length; i++) {
     const cand = metaImgCandidates[i];
-    if (cand) pushCandidateImg(cand, 185);
+    if (cand) pushCandidateImg(cand, 185, '', true);
   }
 
-  // 3. <img> 태그 스캔 (상단 첫 번째 메인 이미지에 순서 가산점 부여)
   const imgRegex = /<img[^>]+(?:data-src|src)=["']([^"']+)["'][^>]*>/gi;
   let im: RegExpExecArray | null;
   let imgIndex = 0;
   while ((im = imgRegex.exec(html)) !== null) {
     const altMatch = im[0].match(/alt=["']([^"']*)["']/i);
-    const positionBonus = imgIndex === 0 ? 35 : imgIndex <= 2 ? 15 : 0;
-    pushCandidateImg(im[1], positionBonus, altMatch?.[1] || '');
+    const positionBonus = imgIndex === 0 ? 35 : imgIndex <= 4 ? 15 : 0;
+    pushCandidateImg(im[1], positionBonus, altMatch?.[1] || '', imgIndex <= 8);
     imgIndex += 1;
   }
 
   const unescapedHtml = html.replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
+  const heroCutoff = unescapedHtml.match(
+    /(?:스타일\s*리뷰|일반\s*리뷰|함께\s*본\s*상품|95점\s*동일\s*상품|review_wrap)/i
+  );
+  const cutoffPos = heroCutoff?.index ?? unescapedHtml.length;
+
   const cdnRegex =
     /https?:\/\/(?:kream-phinf\.pstatic\.net|image\.msscdn\.net|img\.29cm\.co\.kr|d3ha2047wt6x28\.cloudfront\.net|cf\.product-image\.s\.zigzag\.kr|shop-phinf\.pstatic\.net|static\.zara\.net)[^"'\s<>\\)]+/gi;
   let cm: RegExpExecArray | null;
   let cdnIdx = 0;
   while ((cm = cdnRegex.exec(unescapedHtml)) !== null) {
-    pushCandidateImg(cm[0], cdnIdx === 0 ? 25 : 5);
+    const inHero = cm.index < cutoffPos;
+    pushCandidateImg(cm[0], cdnIdx === 0 ? 25 : 5, '', inHero);
     cdnIdx += 1;
   }
 
@@ -523,7 +532,7 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
     extraCategoryText += ' ' + decodeHtmlEntities(metaMap.get('og:description') || '');
   }
 
-  return { title, images, price, extraCategoryText };
+  return { title, images, orderedHeroGallery, price, extraCategoryText };
 }
 
 async function fetchHtmlWithUa(
@@ -554,65 +563,10 @@ async function fetchHtmlWithUa(
   }
 }
 
-async function fetchSingleImageBytes(
-  imgUrl: string,
-  refererOrigin: string,
-  withReferer: boolean
-): Promise<{ buf: ArrayBuffer; mime: string } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
-  try {
-    let targetImgUrl = imgUrl;
-    if (imgUrl.includes('kream-phinf.pstatic.net') && !imgUrl.includes('?')) {
-      targetImgUrl = `${imgUrl}?type=m_webp`;
-    }
-
-    const res = await fetch(targetImgUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        Accept: 'image/webp,image/avif,image/apng,image/*,*/*;q=0.8',
-        ...(withReferer && refererOrigin ? { Referer: refererOrigin } : {}),
-      },
-      redirect: 'follow',
-      signal: controller.signal,
-    });
-
-    if (!res.ok) return null;
-    const rawType = (res.headers.get('content-type') || '').toLowerCase().split(';')[0].trim();
-    if (rawType.startsWith('text/html') || rawType.startsWith('application/json')) {
-      return null;
-    }
-    const buf = await res.arrayBuffer();
-    if (buf.byteLength < 600 || buf.byteLength > 6_000_000) {
-      return null;
-    }
-    const mime = rawType.startsWith('image/')
-      ? rawType
-      : targetImgUrl.toLowerCase().includes('webp')
-      ? 'image/webp'
-      : targetImgUrl.toLowerCase().includes('.png')
-      ? 'image/png'
-      : 'image/jpeg';
-    return { buf, mime };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function resolveVerifiedImageDataUrl(
   candidates: { url: string; score: number }[],
   pageUrl: string
 ): Promise<{ dataUrl: string; sourceImageUrl: string }> {
-  let refererOrigin = '';
-  try {
-    refererOrigin = new URL(pageUrl).origin + '/';
-  } catch {
-    refererOrigin = '';
-  }
-
   const sorted = candidates.slice().sort((a, b) => b.score - a.score);
   const uniqueUrls: string[] = [];
   for (let i = 0; i < sorted.length; i++) {
@@ -625,39 +579,10 @@ async function resolveVerifiedImageDataUrl(
 
   for (let i = 0; i < uniqueUrls.length; i++) {
     const candidateUrl = uniqueUrls[i];
-    let fetched = await fetchSingleImageBytes(candidateUrl, refererOrigin, true);
-    if (!fetched) {
-      fetched = await fetchSingleImageBytes(candidateUrl, refererOrigin, false);
-    }
-    if (!fetched && candidateUrl.includes('kream-phinf.pstatic.net')) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4500);
-      try {
-        const rawRes = await fetch(candidateUrl, {
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            Referer: 'https://kream.co.kr/',
-          },
-          signal: controller.signal,
-        });
-        if (rawRes.ok) {
-          const b = await rawRes.arrayBuffer();
-          if (b.byteLength >= 600 && b.byteLength <= 6_000_000) {
-            fetched = { buf: b, mime: 'image/jpeg' };
-          }
-        }
-      } catch {
-        // 무시
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-
-    if (fetched) {
-      const base64 = Buffer.from(fetched.buf).toString('base64');
+    const inline = await downloadUrlAsInlineData(candidateUrl, pageUrl, 4800);
+    if (inline) {
       return {
-        dataUrl: `data:${fetched.mime};base64,${base64}`,
+        dataUrl: `data:${inline.mimeType};base64,${inline.data}`,
         sourceImageUrl: candidateUrl,
       };
     }
@@ -681,27 +606,15 @@ export async function GET(request: Request) {
     return new Response('Invalid imageUrl', { status: 400 });
   }
 
-  let refererOrigin = '';
-  try {
-    refererOrigin = rawReferer
-      ? new URL(rawReferer).origin + '/'
-      : new URL(cleanUrl).origin + '/';
-  } catch {
-    refererOrigin = '';
-  }
-
-  let fetched = await fetchSingleImageBytes(cleanUrl, refererOrigin, true);
-  if (!fetched) {
-    fetched = await fetchSingleImageBytes(cleanUrl, refererOrigin, false);
-  }
-  if (!fetched) {
+  const inline = await downloadUrlAsInlineData(cleanUrl, rawReferer, 5000);
+  if (!inline) {
     return new Response('Upstream image fetch failed', { status: 502 });
   }
 
-  return new Response(fetched.buf, {
+  return new Response(Buffer.from(inline.data, 'base64'), {
     status: 200,
     headers: {
-      'Content-Type': fetched.mime,
+      'Content-Type': inline.mimeType,
       'Cache-Control': 'public, max-age=86400, s-maxage=86400',
     },
   });
@@ -735,8 +648,8 @@ export async function POST(request: Request) {
     let bestPrice = '';
     let extraText = '';
     const allImages: { url: string; score: number }[] = [];
+    const heroGalleryPool: string[] = [];
 
-    // 1차 전략: 카카오톡·페이스북 미리보기 봇 & 네이버 Yeti & 크롬 UA 직접 조회
     const botUserAgents = [
       'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php); kakaotalk-scrap/1.0 (+https://devtalk.kakao.com)',
       'Mozilla/5.0 (compatible; Yeti/1.1; +http://naver.me/bot)',
@@ -744,7 +657,7 @@ export async function POST(request: Request) {
     ];
 
     for (let i = 0; i < botUserAgents.length; i++) {
-      if (bestTitle && allImages.length >= 2) break;
+      if (bestTitle && selectDistinctAngleUrls(heroGalleryPool, 4).length >= 3) break;
       const html = await fetchHtmlWithUa(cleanUrl, botUserAgents[i], 4000);
       if (!html) continue;
       const parsed = parseHtmlMetadata(html, cleanUrl);
@@ -754,17 +667,18 @@ export async function POST(request: Request) {
       for (let j = 0; j < parsed.images.length; j++) {
         allImages.push(parsed.images[j]);
       }
+      for (let j = 0; j < parsed.orderedHeroGallery.length; j++) {
+        heroGalleryPool.push(parsed.orderedHeroGallery[j]);
+      }
     }
 
-    // 2차 전략: Jina Reader 마크다운 + 페이지 상단 히어로 영역 우선 파싱
-    if (!bestTitle || allImages.length === 0) {
+    // 2차 전략: 제목이 없거나 다각도 갤러리 사진이 1장 이하일 때 Jina Reader로 상단 다각도 슬라이더(썸네일 1..N) 확보!
+    if (!bestTitle || selectDistinctAngleUrls(heroGalleryPool, 4).length < 2) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
+      const timer = setTimeout(() => controller.abort(), 7000);
       try {
         const jinaRes = await fetch(`https://r.jina.ai/${cleanUrl}`, {
-          headers: {
-            'X-Locale': 'ko-KR',
-          },
+          headers: { 'X-Locale': 'ko-KR' },
           signal: controller.signal,
         });
         if (jinaRes.ok) {
@@ -778,9 +692,8 @@ export async function POST(request: Request) {
           }
           extraText += ' ' + mdText.slice(0, 1500);
 
-          // 페이지 하단의 '유사 상품 / 스타일 리뷰 / 브랜드 소개 / 함께 본 상품' 섹션 시작 위치 파악
           const secondarySectionMatch = mdText.match(
-            /\n(?:#+\s*)?(?:유사\s*상품|스타일\s*리뷰|함께\s*본\s*상품|브랜드\s*\n)/
+            /\n(?:#+\s*)?(?:스타일\s*리뷰|일반\s*리뷰|거래\s*내역\s*더보기|관련\s*기획전|95점\s*동일\s*상품|함께\s*본\s*상품|브랜드\s*\n)/
           );
           const secondaryCutoffIdx = secondarySectionMatch?.index ?? mdText.length;
 
@@ -792,7 +705,10 @@ export async function POST(request: Request) {
             if (!norm) continue;
             const isHeroZone = m.index < secondaryCutoffIdx;
             const zoneBonus = isHeroZone ? (heroCount === 0 ? 95 : 40) : -70;
-            if (isHeroZone) heroCount += 1;
+            if (isHeroZone && !isLikelyBrandLogoAlt(m[1], bestTitle)) {
+              heroGalleryPool.push(norm);
+              heroCount += 1;
+            }
             const sc = scoreProductImage(norm, m[1], bestTitle) + zoneBonus;
             if (sc > 0) allImages.push({ url: norm, score: sc });
           }
@@ -806,7 +722,10 @@ export async function POST(request: Request) {
             if (!norm) continue;
             const isHeroZone = cm.index < secondaryCutoffIdx;
             const zoneBonus = isHeroZone ? (rawIdx === 0 ? 60 : 20) : -50;
-            if (isHeroZone) rawIdx += 1;
+            if (isHeroZone) {
+              heroGalleryPool.push(norm);
+              rawIdx += 1;
+            }
             const sc = scoreProductImage(norm, '', bestTitle) + zoneBonus;
             if (sc > 0) allImages.push({ url: norm, score: sc });
           }
@@ -818,7 +737,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // 3차 전략: Microlink 오픈그래프 API 보조 조회
     if (!bestTitle || allImages.length === 0) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4500);
@@ -838,6 +756,7 @@ export async function POST(request: Request) {
             const norm = normalizeImageUrl(rawImg, cleanUrl);
             if (!isGenericOrBadImage(norm)) {
               allImages.push({ url: norm, score: 150 });
+              heroGalleryPool.push(norm);
             }
           }
         }
@@ -848,7 +767,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // 4차 전략: 네이버 모바일 통합검색에서 해당 상품 URL/상품명 공식 썸네일 조회
     if (!bestTitle || allImages.length === 0) {
       const searchQ = bestTitle ? `${store} ${bestTitle}` : cleanUrl;
       const naverHtml = await fetchHtmlWithUa(
@@ -883,6 +801,26 @@ export async function POST(request: Request) {
 
     if (bestTitle) {
       const verifiedImg = await resolveVerifiedImageDataUrl(allImages, cleanUrl);
+      const distinctGallery = selectDistinctAngleUrls(
+        [verifiedImg.sourceImageUrl, ...heroGalleryPool],
+        4
+      );
+      // 다각도 갤러리 미리보기가 브라우저에서 핫링크 차단 없이 즉시 보이도록 최대 4장 병렬 Base64 변환
+      const galleryDataUrls: string[] = [];
+      if (distinctGallery.length > 0) {
+        const dlResults = await Promise.all(
+          distinctGallery.map((gUrl) =>
+            downloadUrlAsInlineData(gUrl, cleanUrl, 3800)
+          )
+        );
+        for (let k = 0; k < dlResults.length; k++) {
+          const item = dlResults[k];
+          if (item) {
+            galleryDataUrls.push(`data:${item.mimeType};base64,${item.data}`);
+          }
+        }
+      }
+
       const combinedContext = `${bestTitle} ${extraText}`;
       return NextResponse.json({
         success: true,
@@ -893,7 +831,10 @@ export async function POST(request: Request) {
         category: inferCategory(combinedContext),
         season: inferSeason(combinedContext),
         image: verifiedImg.sourceImageUrl || '',
-        imageDataUrl: verifiedImg.dataUrl || '',
+        imageDataUrl:
+          galleryDataUrls[0] || verifiedImg.dataUrl || '',
+        galleryUrls: distinctGallery,
+        galleryDataUrls,
       });
     }
 
