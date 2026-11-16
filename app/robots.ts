@@ -9,7 +9,7 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ['/api/'],
       },
     ],
-    sitemap: 'https://garmentory-web.vercel.app/sitemap.xml',
-    host: 'https://garmentory-web.vercel.app',
+    sitemap: 'https://873oc.vercel.app/sitemap.xml',
+    host: 'https://873oc.vercel.app',
   };
 }

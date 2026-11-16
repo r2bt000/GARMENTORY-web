@@ -1,6 +1,6 @@
 {
-  "name": "oblique-web",
-  "version": "1.1.0",
+  "name": "873oc-web",
+  "version": "1.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",

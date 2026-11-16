@@ -3,8 +3,8 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
-  title: '개인정보처리방침 (Privacy Policy) — OBLIQUE',
-  description: 'OBLIQUE AI 디지털 옷장 및 스타일링 플랫폼 개인정보처리방침',
+  title: '개인정보처리방침 (Privacy Policy) — 873oc',
+  description: '873oc AI 디지털 옷장 및 스타일링 플랫폼 개인정보처리방침',
 };
 
 export default function PrivacyPolicyPage() {
@@ -17,10 +17,10 @@ export default function PrivacyPolicyPage() {
               PRIVACY POLICY
             </p>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight mt-1">
-              OBLIQUE 개인정보처리방침
+              873oc 개인정보처리방침
             </h1>
             <p className="text-xs text-zinc-400 mt-1">
-              시행일자: 2026년 11월 15일
+              시행일자: 2026년 11월 16일
             </p>
           </div>
           <Link
@@ -33,11 +33,11 @@ export default function PrivacyPolicyPage() {
 
         <section className="space-y-2 text-xs sm:text-sm leading-relaxed text-zinc-700">
           <p>
-            <strong>OBLIQUE</strong>(이하 &ldquo;서비스&rdquo;, 도메인:{' '}
-            <code>https://garmentory-web.vercel.app</code>)는 이용자의
-            개인정보를 중요시하며 관련 법령 및 Google OAuth 2.0 사용자 데이터
-            보호 정책을 준수합니다. 본 방침은 서비스가 어떤 정보를 수집하고
-            어떻게 활용·보호하는지 안내합니다.
+            <strong>873oc</strong>(이하 &ldquo;서비스&rdquo;, 도메인:{' '}
+            <code>https://873oc.vercel.app</code>)는 이용자의 개인정보를
+            중요시하며 관련 법령 및 Google OAuth 2.0 사용자 데이터 보호 정책을
+            준수합니다. 본 방침은 서비스가 어떤 정보를 수집하고 어떻게
+            활용·보호하는지 안내합니다.
           </p>
         </section>
 
@@ -112,7 +112,7 @@ export default function PrivacyPolicyPage() {
         </section>
 
         <div className="pt-2 border-t border-zinc-100 flex items-center justify-between text-xs text-zinc-400">
-          <span>© 2026 OBLIQUE. All rights reserved.</span>
+          <span>© 2026 873oc. All rights reserved.</span>
           <Link href="/terms" className="text-zinc-600 hover:underline font-medium">
             서비스 이용약관 보기 →
           </Link>

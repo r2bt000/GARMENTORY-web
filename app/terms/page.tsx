@@ -3,8 +3,8 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
-  title: '서비스 이용약관 (Terms of Service) — OBLIQUE',
-  description: 'OBLIQUE AI 디지털 옷장 및 스타일링 플랫폼 서비스 이용약관',
+  title: '서비스 이용약관 (Terms of Service) — 873oc',
+  description: '873oc AI 디지털 옷장 및 스타일링 플랫폼 서비스 이용약관',
 };
 
 export default function TermsOfServicePage() {
@@ -17,10 +17,10 @@ export default function TermsOfServicePage() {
               TERMS OF SERVICE
             </p>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight mt-1">
-              OBLIQUE 서비스 이용약관
+              873oc 서비스 이용약관
             </h1>
             <p className="text-xs text-zinc-400 mt-1">
-              시행일자: 2026년 11월 15일
+              시행일자: 2026년 11월 16일
             </p>
           </div>
           <Link
@@ -34,7 +34,7 @@ export default function TermsOfServicePage() {
         <section className="space-y-2 text-xs sm:text-sm leading-relaxed text-zinc-700">
           <h2 className="text-base font-bold text-zinc-900">제1조 (목적)</h2>
           <p>
-            본 약관은 <strong>OBLIQUE</strong>(이하 &ldquo;서비스&rdquo;)가
+            본 약관은 <strong>873oc</strong>(이하 &ldquo;서비스&rdquo;)가
             제공하는 AI 디지털 옷장 아카이빙, 스타일링 추천 및 오픈 옷장 커뮤니티
             기능의 이용 조건과 운영 기준을 규정함을 목적으로 합니다.
           </p>
@@ -87,7 +87,7 @@ export default function TermsOfServicePage() {
         </section>
 
         <div className="pt-2 border-t border-zinc-100 flex items-center justify-between text-xs text-zinc-400">
-          <span>© 2026 OBLIQUE. All rights reserved.</span>
+          <span>© 2026 873oc. All rights reserved.</span>
           <Link
             href="/privacy"
             className="text-zinc-600 hover:underline font-medium"

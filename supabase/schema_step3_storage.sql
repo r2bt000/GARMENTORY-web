@@ -1,5 +1,5 @@
 -- =====================================================================
--- OBLIQUE (AuraFit) 3단계: Supabase Storage 의류 이미지 전용 버킷 & RLS 보안 정책
+-- 873oc 3단계: Supabase Storage 의류 이미지 전용 버킷 & RLS 보안 정책
 -- 실행 위치: Supabase Dashboard -> SQL Editor -> New Query 붙여넣기 후 [Run] 클릭
 -- 공식 참고: https://supabase.com/docs/guides/storage/buckets/creating-buckets
 --           https://supabase.com/docs/guides/storage/security/access-control
