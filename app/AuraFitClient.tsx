@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 import {
   UserCheck,
@@ -16,6 +16,8 @@ import {
   SlidersHorizontal,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Wand2,
   RefreshCw,
   Inbox,
@@ -41,7 +43,18 @@ import {
 type CategoryType = '아우터' | '상의' | '하의' | '신발' | '악세사리';
 type ClothStatus = '보유 중' | '구매 예정';
 type PhotoSideType = 'auto' | 'front' | 'back';
-type LookbookPoseAngle = 'front' | 'back';
+type LookbookPoseAngle = 'front' | 'left' | 'right' | 'back';
+
+interface VerifiedGarmentPlanClient {
+  name: string;
+  category: string;
+  frontSource: string | null;
+  sideSource: string | null;
+  backSource: string | null;
+  frontSpec: string;
+  sideSpec: string;
+  backSpec: string;
+}
 type MainTab = 'wardrobe' | 'stylist' | 'community' | 'saved';
 type ProfileSubTab = 'closet' | 'style' | 'inbox';
 
@@ -89,6 +102,7 @@ interface SavedLook {
   items: ClothItem[];
   note: string;
   lookbookImage?: string;
+  lookbookAngles?: Partial<Record<LookbookPoseAngle, string>>;
   stylePresetLabel?: string;
 }
 
@@ -133,6 +147,8 @@ interface StylistResult {
   mode: 'DAY' | 'NIGHT';
   genre: string;
   lookbookImage?: string;
+  lookbookAngles?: Partial<Record<LookbookPoseAngle, string>>;
+  verifiedPlan?: VerifiedGarmentPlanClient[];
   lookbookEngine?: string;
   lookbookPresetLabel?: string;
 }
@@ -552,6 +568,17 @@ const compressDataUrlToWebP = (
   });
 };
 
+const STUDIO_ANGLES: {
+  id: LookbookPoseAngle;
+  label: string;
+  stepBadge: string;
+}[] = [
+  { id: 'front', label: '정면', stepBadge: '1/4 · 정면 (Front)' },
+  { id: 'left', label: '좌측면', stepBadge: '2/4 · 좌측면 (Left)' },
+  { id: 'right', label: '우측면', stepBadge: '3/4 · 우측면 (Right)' },
+  { id: 'back', label: '뒷면', stepBadge: '4/4 · 뒷면 (Back)' },
+];
+
 const LOOKBOOK_FIT_TARGETS: { id: LookbookFitTarget; label: string }[] = [
   { id: 'male', label: '남성 모델 전신샷' },
   { id: 'female', label: '여성 모델 전신샷' },
@@ -871,9 +898,24 @@ export default function AuraFitClient() {
   const [lookbookViewMode, setLookbookViewMode] = useState<'photo' | 'collage'>(
     'photo'
   );
+  const [loadingAngles, setLoadingAngles] = useState<
+    Partial<Record<LookbookPoseAngle, boolean>>
+  >({});
+  const [carouselTouchStartX, setCarouselTouchStartX] = useState<number | null>(
+    null
+  );
+  const [savedCardAngleMap, setSavedCardAngleMap] = useState<
+    Record<number, LookbookPoseAngle>
+  >({});
+  const shootSessionRef = useRef<number>(0);
   const [lookbookStatusHint, setLookbookStatusHint] = useState<string>('');
   const [lookbookMissingKey, setLookbookMissingKey] = useState<boolean>(false);
   const [zoomLookbookUrl, setZoomLookbookUrl] = useState<string>('');
+  const [zoomLookbookAngles, setZoomLookbookAngles] = useState<
+    Partial<Record<LookbookPoseAngle, string>> | null
+  >(null);
+  const [zoomActiveAngle, setZoomActiveAngle] =
+    useState<LookbookPoseAngle>('front');
   const [isSavingLookbook, setIsSavingLookbook] = useState<boolean>(false);
 
   // 매거진 모달 & 복귀 배너 상태
@@ -1139,6 +1181,16 @@ export default function AuraFitClient() {
                 rawJson.lookbookImage
                   ? rawJson.lookbookImage
                   : undefined;
+              const parsedAngles =
+                !Array.isArray(rawJson) &&
+                rawJson?.lookbookAngles &&
+                typeof rawJson.lookbookAngles === 'object'
+                  ? (rawJson.lookbookAngles as Partial<
+                      Record<LookbookPoseAngle, string>
+                    >)
+                  : parsedCover
+                  ? { front: parsedCover }
+                  : undefined;
               const parsedPreset =
                 !Array.isArray(rawJson) &&
                 typeof rawJson?.stylePresetLabel === 'string' &&
@@ -1152,7 +1204,8 @@ export default function AuraFitClient() {
                 title: r.title,
                 items: parsedItems,
                 note: r.note || '',
-                lookbookImage: parsedCover,
+                lookbookImage: parsedCover || parsedAngles?.front,
+                lookbookAngles: parsedAngles,
                 stylePresetLabel: parsedPreset,
               };
             })
@@ -1708,9 +1761,113 @@ export default function AuraFitClient() {
     }
   };
 
+  const stepCarouselAngle = (
+    current: LookbookPoseAngle,
+    delta: -1 | 1
+  ): LookbookPoseAngle => {
+    const order: LookbookPoseAngle[] = ['front', 'left', 'right', 'back'];
+    const idx = order.indexOf(current);
+    const nextIdx = (idx + delta + order.length) % order.length;
+    return order[nextIdx];
+  };
+
+  const openLightboxCarousel = (
+    anglesObj: Partial<Record<LookbookPoseAngle, string>> | undefined,
+    fallbackSingleUrl: string,
+    initialAngle: LookbookPoseAngle = 'front'
+  ) => {
+    const merged: Partial<Record<LookbookPoseAngle, string>> =
+      anglesObj && Object.keys(anglesObj).length > 0
+        ? anglesObj
+        : fallbackSingleUrl
+        ? { front: fallbackSingleUrl }
+        : {};
+    const firstValid =
+      merged[initialAngle] ||
+      merged.front ||
+      merged.left ||
+      merged.right ||
+      merged.back ||
+      fallbackSingleUrl;
+    if (!firstValid) return;
+    setZoomLookbookAngles(merged);
+    setZoomActiveAngle(merged[initialAngle] ? initialAngle : 'front');
+    setZoomLookbookUrl(firstValid);
+  };
+
+  // 라이트박스 열림 상태에서 키보드 좌·우 화살표로 쇼핑몰처럼 4면 넘겨보기 지원
+  useEffect(() => {
+    if (!zoomLookbookUrl) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        setZoomLookbookUrl('');
+        setZoomLookbookAngles(null);
+      } else if (ev.key === 'ArrowLeft' && zoomLookbookAngles) {
+        setZoomActiveAngle((prev) => {
+          const next = stepCarouselAngle(prev, -1);
+          const url = zoomLookbookAngles[next];
+          if (url) setZoomLookbookUrl(url);
+          return url ? next : prev;
+        });
+      } else if (ev.key === 'ArrowRight' && zoomLookbookAngles) {
+        setZoomActiveAngle((prev) => {
+          const next = stepCarouselAngle(prev, 1);
+          const url = zoomLookbookAngles[next];
+          if (url) setZoomLookbookUrl(url);
+          return url ? next : prev;
+        });
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoomLookbookUrl, zoomLookbookAngles]);
+
+  const prepareGarmentsForLookbook = async (sourceItems: ClothItem[]) => {
+    return Promise.all(
+      sourceItems.map(async (it) => {
+        let mainImg = it.image;
+        if (
+          mainImg &&
+          mainImg.startsWith('data:image/') &&
+          !mainImg.startsWith('data:image/svg')
+        ) {
+          const small = await compressDataUrlToWebP(mainImg, 768, 0.82);
+          mainImg = small.dataUrl;
+        }
+        const rawExtras = Array.isArray(it.extraImages)
+          ? it.extraImages.slice(0, 3)
+          : [];
+        const preparedExtras = await Promise.all(
+          rawExtras.map(async (ex) => {
+            if (
+              ex &&
+              ex.startsWith('data:image/') &&
+              !ex.startsWith('data:image/svg')
+            ) {
+              const smallEx = await compressDataUrlToWebP(ex, 720, 0.8);
+              return smallEx.dataUrl;
+            }
+            return ex;
+          })
+        );
+        return {
+          name: it.name,
+          category: it.category,
+          status: it.status,
+          image: mainImg,
+          sourceUrl: it.sourceUrl || '',
+          photoSide: it.photoSide || 'auto',
+          extraImages: preparedExtras.filter(Boolean),
+        };
+      })
+    );
+  };
+
+  // 쇼핑몰 카탈로그 방식: (1) 비전 앞뒤 분리 + 정면(Front) 우선 완성 -> (2) 정면 모델을 앵커로 좌측·우측·뒷면 3컷 병렬 현상!
   const generateLookbookPhoto = async (
     overrideItems?: ClothItem[],
-    overrideGenre?: string
+    overrideGenre?: string,
+    singleAngleOnly?: LookbookPoseAngle
   ) => {
     const sourceItems = (
       overrideItems ||
@@ -1719,7 +1876,7 @@ export default function AuraFitClient() {
     ).slice(0, 5);
 
     if (sourceItems.length === 0) {
-      showToast('먼저 화보를 촬영할 의류를 1벌 이상 터치해 선택해 주세요!');
+      showToast('먼저 모델샷을 촬영할 의류를 1벌 이상 터치해 선택해 주세요!');
       return;
     }
 
@@ -1728,56 +1885,113 @@ export default function AuraFitClient() {
         '내 사진 피팅 모드에서는 먼저 내 전신·거울샷 사진을 업로드해 주세요!'
       );
       setLookbookStatusHint(
-        '좌측 화보 스튜디오에서 내 전신·거울샷 사진을 업로드한 뒤 다시 촬영 버튼을 눌러주세요.'
+        '좌측 스튜디오 설정에서 내 전신·거울샷 사진을 업로드한 뒤 다시 촬영 버튼을 눌러주세요.'
       );
       return;
     }
 
-    setIsGeneratingLookbook(true);
+    const activeGenreVal =
+      overrideGenre || stylistResult?.genre || selectedGenre;
+
     setLookbookStatusHint('');
     setLookbookMissingKey(false);
 
-    try {
-      // Vercel 서버리스 4.5MB 요청 한도 초과 방지를 위해 각 참조 이미지를 768px WebP로 경량화
-      const preparedGarments = await Promise.all(
-        sourceItems.map(async (it) => {
-          let mainImg = it.image;
-          if (
-            mainImg &&
-            mainImg.startsWith('data:image/') &&
-            !mainImg.startsWith('data:image/svg')
-          ) {
-            const small = await compressDataUrlToWebP(mainImg, 768, 0.82);
-            mainImg = small.dataUrl;
-          }
-          const rawExtras = Array.isArray(it.extraImages)
-            ? it.extraImages.slice(0, 3)
-            : [];
-          const preparedExtras = await Promise.all(
-            rawExtras.map(async (ex) => {
-              if (
-                ex &&
-                ex.startsWith('data:image/') &&
-                !ex.startsWith('data:image/svg')
-              ) {
-                const smallEx = await compressDataUrlToWebP(ex, 720, 0.8);
-                return smallEx.dataUrl;
-              }
-              return ex;
-            })
+    // 특정 1개 면만 단독 재촬영하는 경우 (기존 앞뒤 검증 플랜 + 정면 앵커 그대로 재사용하여 앞뒤 뒤바뀜 원천 방지!)
+    if (singleAngleOnly) {
+      setLoadingAngles((prev) => ({ ...prev, [singleAngleOnly]: true }));
+      try {
+        const preparedGarments = await prepareGarmentsForLookbook(sourceItems);
+        let preparedUserPhoto: string | undefined = undefined;
+        if (lookbookFitTarget === 'my_photo' && userTryOnPhoto) {
+          const smallUser = await compressDataUrlToWebP(
+            userTryOnPhoto,
+            896,
+            0.84
           );
-          return {
-            name: it.name,
-            category: it.category,
-            status: it.status,
-            image: mainImg,
-            sourceUrl: it.sourceUrl || '',
-            photoSide: it.photoSide || 'auto',
-            extraImages: preparedExtras.filter(Boolean),
-          };
-        })
-      );
+          preparedUserPhoto = smallUser.dataUrl;
+        }
 
+        let anchorDataUrl: string | undefined = undefined;
+        const existingFront = stylistResult?.lookbookAngles?.front || stylistResult?.lookbookImage;
+        if (singleAngleOnly !== 'front' && existingFront) {
+          const smallAnchor = await compressDataUrlToWebP(
+            existingFront,
+            768,
+            0.82
+          );
+          anchorDataUrl = smallAnchor.dataUrl;
+        }
+
+        const resp = await fetch('/api/lookbook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            isDarkMode,
+            fitTarget: lookbookFitTarget,
+            angle: singleAngleOnly,
+            includePlan: singleAngleOnly === 'front',
+            verifiedPlan: stylistResult?.verifiedPlan,
+            anchorFrontImage: anchorDataUrl,
+            activeGenre: activeGenreVal,
+            selectedDetails: activeDetails,
+            garments: preparedGarments,
+            userModelImage: preparedUserPhoto,
+            clientGeminiKey: apiConfig.geminiKey,
+            clientFashnKey: apiConfig.fashnKey,
+          }),
+        });
+        const json = await resp.json();
+        if (json?.success && typeof json.imageDataUrl === 'string') {
+          const crisp = await compressDataUrlToWebP(
+            json.imageDataUrl,
+            1280,
+            0.88
+          );
+          setStylistResult((prev) => {
+            if (!prev) return prev;
+            const nextAngles = {
+              ...(prev.lookbookAngles || {}),
+              [singleAngleOnly]: crisp.dataUrl,
+            };
+            return {
+              ...prev,
+              lookbookImage:
+                singleAngleOnly === 'front'
+                  ? crisp.dataUrl
+                  : prev.lookbookImage || crisp.dataUrl,
+              lookbookAngles: nextAngles,
+              verifiedPlan: json.verifiedPlan || prev.verifiedPlan,
+            };
+          });
+          const labelKor =
+            STUDIO_ANGLES.find((a) => a.id === singleAngleOnly)?.label ||
+            singleAngleOnly;
+          showToast(`📸 '${labelKor}' 모델샷이 깔끔하게 다시 촬영되었습니다!`);
+        } else {
+          showToast(json?.message || '재촬영 중 오류가 발생했습니다.');
+        }
+      } catch {
+        showToast('서버 통신 중 오류가 발생했습니다.');
+      } finally {
+        setLoadingAngles((prev) => ({ ...prev, [singleAngleOnly]: false }));
+      }
+      return;
+    }
+
+    // 4면(정면 · 좌측면 · 우측면 · 뒷면) 전체 카탈로그 촬영 시작!
+    const sessionId = Date.now();
+    shootSessionRef.current = sessionId;
+    setIsGeneratingLookbook(true);
+    setLookbookPoseAngle('front');
+    setLoadingAngles({
+      front: true,
+      left: true,
+      right: true,
+      back: true,
+    });
+
+    try {
+      const preparedGarments = await prepareGarmentsForLookbook(sourceItems);
       let preparedUserPhoto: string | undefined = undefined;
       if (lookbookFitTarget === 'my_photo' && userTryOnPhoto) {
         const smallUser = await compressDataUrlToWebP(
@@ -1788,14 +2002,16 @@ export default function AuraFitClient() {
         preparedUserPhoto = smallUser.dataUrl;
       }
 
-      const resp = await fetch('/api/lookbook', {
+      // [Step 1] 앞·뒤 비전 사전 분리 + 1번 슬라이드 '정면(Front)' 우선 현상
+      const frontResp = await fetch('/api/lookbook', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           isDarkMode,
           fitTarget: lookbookFitTarget,
-          poseAngle: lookbookPoseAngle,
-          activeGenre: overrideGenre || stylistResult?.genre || selectedGenre,
+          angle: 'front',
+          includePlan: true,
+          activeGenre: activeGenreVal,
           selectedDetails: activeDetails,
           garments: preparedGarments,
           userModelImage: preparedUserPhoto,
@@ -1804,47 +2020,137 @@ export default function AuraFitClient() {
         }),
       });
 
-      const json = await resp.json();
+      const frontJson = await frontResp.json();
+      if (shootSessionRef.current !== sessionId) return;
 
-      if (json?.success && typeof json.imageDataUrl === 'string') {
-        const crispWebp = await compressDataUrlToWebP(
-          json.imageDataUrl,
-          1280,
-          0.88
-        );
+      if (!frontJson?.success || typeof frontJson.imageDataUrl !== 'string') {
+        setIsGeneratingLookbook(false);
+        setLoadingAngles({});
+        if (frontJson?.missingKey) {
+          setLookbookMissingKey(true);
+          setLookbookStatusHint(
+            frontJson.message ||
+              'GEMINI_API_KEY 등록 시 전·좌·우·후 4면 스튜디오 모델샷이 생성됩니다.'
+          );
+        } else {
+          const errMsg =
+            frontJson?.message ||
+            'AI 모델샷 촬영 중 일시적인 오류가 발생했습니다.';
+          setLookbookStatusHint(errMsg);
+          showToast(errMsg);
+        }
+        return;
+      }
+
+      const frontWebp = await compressDataUrlToWebP(
+        frontJson.imageDataUrl,
+        1280,
+        0.88
+      );
+      const lockedPlan: VerifiedGarmentPlanClient[] | undefined =
+        Array.isArray(frontJson.verifiedPlan)
+          ? frontJson.verifiedPlan
+          : undefined;
+
+      if (shootSessionRef.current !== sessionId) return;
+
+      // 정면 컷이 완성되는 즉시 화면에 먼저 띄워 대기 체감을 대폭 단축!
+      setStylistResult((prev) =>
+        prev
+          ? {
+              ...prev,
+              lookbookImage: frontWebp.dataUrl,
+              lookbookAngles: { front: frontWebp.dataUrl },
+              verifiedPlan: lockedPlan,
+              lookbookEngine:
+                frontJson.engineLabel ||
+                'White Studio · 4면(전·좌·우·후) 카탈로그',
+              lookbookPresetLabel: '화이트 스튜디오 4면 모델샷',
+              apiBadge: '📸 정면 완료 · 좌/우/뒷면 현상 중...',
+            }
+          : prev
+      );
+      setLookbookViewMode('photo');
+      setIsGeneratingLookbook(false);
+      setLoadingAngles((prev) => ({ ...prev, front: false }));
+
+      // [Step 2] 방금 완성된 '정면 모델샷'을 일관성 앵커로 삼아 '좌측면 · 우측면 · 뒷면' 3컷을 동시에 병렬 현상!
+      const smallAnchor = await compressDataUrlToWebP(
+        frontWebp.dataUrl,
+        768,
+        0.82
+      );
+      const remainingAngles: LookbookPoseAngle[] = ['left', 'right', 'back'];
+
+      await Promise.allSettled(
+        remainingAngles.map(async (ang) => {
+          try {
+            const angResp = await fetch('/api/lookbook', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                isDarkMode,
+                fitTarget: lookbookFitTarget,
+                angle: ang,
+                verifiedPlan: lockedPlan,
+                anchorFrontImage: smallAnchor.dataUrl,
+                activeGenre: activeGenreVal,
+                selectedDetails: activeDetails,
+                garments: preparedGarments,
+                clientGeminiKey: apiConfig.geminiKey,
+                clientFashnKey: apiConfig.fashnKey,
+              }),
+            });
+            const angJson = await angResp.json();
+            if (shootSessionRef.current !== sessionId) return;
+
+            if (angJson?.success && typeof angJson.imageDataUrl === 'string') {
+              const angWebp = await compressDataUrlToWebP(
+                angJson.imageDataUrl,
+                1280,
+                0.88
+              );
+              if (shootSessionRef.current !== sessionId) return;
+              setStylistResult((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  lookbookAngles: {
+                    ...(prev.lookbookAngles || {}),
+                    [ang]: angWebp.dataUrl,
+                  },
+                };
+              });
+            }
+          } finally {
+            if (shootSessionRef.current === sessionId) {
+              setLoadingAngles((prev) => ({ ...prev, [ang]: false }));
+            }
+          }
+        })
+      );
+
+      if (shootSessionRef.current === sessionId) {
         setStylistResult((prev) =>
           prev
             ? {
                 ...prev,
-                lookbookImage: crispWebp.dataUrl,
-                lookbookEngine:
-                  json.engineLabel || 'Gemini 2.5 Flash Image · White Studio',
-                lookbookPresetLabel:
-                  json.presetLabel || '화이트 스튜디오 모델샷',
-                apiBadge: '📸 화이트 스튜디오 AI 모델샷 완성',
+                apiBadge: '📸 전·좌·우·후 4면 모델샷 완성',
               }
             : prev
         );
-        setLookbookViewMode('photo');
-        showToast('📸 깔끔한 화이트 스튜디오 AI 착장 모델샷이 완성되었습니다!');
-      } else if (json?.missingKey) {
-        setLookbookMissingKey(true);
-        setLookbookStatusHint(
-          json.message ||
-            'GEMINI_API_KEY 등록 시 선택한 의류를 착용한 실사 화보가 생성됩니다.'
+        showToast(
+          '✨ 정면·좌측면·우측면·뒷면 4면 쇼핑몰 모델샷이 모두 완성되었습니다! 좌우로 넘겨보세요.'
         );
-      } else {
-        const errMsg =
-          json?.message || 'AI 화보 촬영 중 일시적인 오류가 발생했습니다.';
-        setLookbookStatusHint(errMsg);
-        showToast(errMsg);
       }
     } catch {
-      setLookbookStatusHint(
-        '화보 생성 서버와 통신하지 못했습니다. 잠시 후 다시 촬영 버튼을 눌러주세요.'
-      );
-    } finally {
-      setIsGeneratingLookbook(false);
+      if (shootSessionRef.current === sessionId) {
+        setIsGeneratingLookbook(false);
+        setLoadingAngles({});
+        setLookbookStatusHint(
+          '모델샷 생성 서버와 통신하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+        );
+      }
     }
   };
 
@@ -1869,48 +2175,65 @@ export default function AuraFitClient() {
     setIsSavingLookbook(true);
 
     try {
-      let persistedCoverUrl: string | undefined = stylistResult.lookbookImage;
+      const rawAngles: Partial<Record<LookbookPoseAngle, string>> =
+        stylistResult.lookbookAngles &&
+        Object.keys(stylistResult.lookbookAngles).length > 0
+          ? stylistResult.lookbookAngles
+          : stylistResult.lookbookImage
+          ? { front: stylistResult.lookbookImage }
+          : {};
 
-      // AI 화보가 생성되어 있고 로그인 상태라면 Supabase Storage(wardrobe-images)에 WebP로 영구 업로드
-      if (
-        stylistResult.lookbookImage &&
-        stylistResult.lookbookImage.startsWith('data:image/')
-      ) {
-        const compressed = await compressDataUrlToWebP(
-          stylistResult.lookbookImage,
-          1150,
-          0.85
-        );
-        persistedCoverUrl = compressed.dataUrl;
+      const persistedAngles: Partial<Record<LookbookPoseAngle, string>> = {};
+      const angleKeys: LookbookPoseAngle[] = ['front', 'left', 'right', 'back'];
 
-        if (authUser && supabaseClient && compressed.blob) {
-          const fileName = `lookbook_${Date.now()}_${Math.random()
-            .toString(36)
-            .slice(2, 7)}.${compressed.ext}`;
-          const storagePath = `${authUser.id}/${fileName}`;
-          const { error: upErr } = await supabaseClient.storage
-            .from(STORAGE_BUCKET)
-            .upload(storagePath, compressed.blob, {
-              contentType: compressed.mimeType,
-              cacheControl: '3600',
-              upsert: false,
-            });
-          if (!upErr) {
-            const { data: pubData } = supabaseClient.storage
+      await Promise.all(
+        angleKeys.map(async (angKey) => {
+          const src = rawAngles[angKey];
+          if (!src) return;
+          if (!src.startsWith('data:image/')) {
+            persistedAngles[angKey] = src;
+            return;
+          }
+          const compressed = await compressDataUrlToWebP(src, 1100, 0.84);
+          let finalUrl = compressed.dataUrl;
+
+          if (authUser && supabaseClient && compressed.blob) {
+            const fileName = `lookbook_${Date.now()}_${angKey}_${Math.random()
+              .toString(36)
+              .slice(2, 6)}.${compressed.ext}`;
+            const storagePath = `${authUser.id}/${fileName}`;
+            const { error: upErr } = await supabaseClient.storage
               .from(STORAGE_BUCKET)
-              .getPublicUrl(storagePath);
-            if (pubData?.publicUrl) {
-              persistedCoverUrl = pubData.publicUrl;
+              .upload(storagePath, compressed.blob, {
+                contentType: compressed.mimeType,
+                cacheControl: '3600',
+                upsert: false,
+              });
+            if (!upErr) {
+              const { data: pubData } = supabaseClient.storage
+                .from(STORAGE_BUCKET)
+                .getPublicUrl(storagePath);
+              if (pubData?.publicUrl) {
+                finalUrl = pubData.publicUrl;
+              }
             }
           }
-        }
-      }
+          persistedAngles[angKey] = finalUrl;
+        })
+      );
+
+      const persistedCoverUrl =
+        persistedAngles.front ||
+        persistedAngles.left ||
+        persistedAngles.right ||
+        persistedAngles.back;
 
       if (authUser && supabaseClient) {
         const itemsJsonPayload = persistedCoverUrl
           ? {
               items: stylistResult.items,
               lookbookImage: persistedCoverUrl,
+              lookbookAngles: persistedAngles,
               stylePresetLabel: stylistResult.lookbookPresetLabel || '',
             }
           : stylistResult.items;
@@ -1937,12 +2260,16 @@ export default function AuraFitClient() {
             items: stylistResult.items,
             note: data.note,
             lookbookImage: persistedCoverUrl,
+            lookbookAngles:
+              Object.keys(persistedAngles).length > 0
+                ? persistedAngles
+                : undefined,
             stylePresetLabel: stylistResult.lookbookPresetLabel,
           };
           setSavedLooks((prev) => [cloudLook, ...prev]);
           showToast(
             persistedCoverUrl
-              ? "☁️ AI 착장 화보와 코디가 '저장된 룩북' 클라우드에 영구 보관되었습니다!"
+              ? "☁️ 4면 모델샷과 코디가 '저장된 룩북' 클라우드에 영구 보관되었습니다!"
               : "☁️ 코디가 내 계정 '저장된 룩북' DB에 영구 보관되었습니다!"
           );
           return;
@@ -1957,6 +2284,8 @@ export default function AuraFitClient() {
         items: stylistResult.items,
         note: stylistResult.note,
         lookbookImage: persistedCoverUrl,
+        lookbookAngles:
+          Object.keys(persistedAngles).length > 0 ? persistedAngles : undefined,
         stylePresetLabel: stylistResult.lookbookPresetLabel,
       };
       setSavedLooks((prev) => [newLook, ...prev]);
@@ -3579,54 +3908,16 @@ export default function AuraFitClient() {
                     }`}
                   >
                     <p className="font-bold text-xs mb-0.5">
-                      ✓ 순백색 스튜디오 고정 + 쇼핑몰 다각도(앞·옆·뒤) 자동 인식
+                      ✓ 정면 · 좌측면 · 우측면 · 뒷면 4면 자동 촬영
                     </p>
                     <p className="text-[10px] opacity-80">
-                      링크로 등록된 옷은 연결된 사이트의 앞·옆·뒷면 사진을 서버가 함께 읽어들여, 등판(뒷면) 프린트가 앞가슴에 잘못 찍히는 현상을 방지합니다.
+                      실제 쇼핑몰 카탈로그처럼 화이트 스튜디오 4면을 모두 생성해 옆으로 넘겨볼 수 있으며, AI 비전이 의류 앞·뒷면을 먼저 분리해 재생성해도 등판 그래픽이 앞면에 찍히지 않습니다.
                     </p>
                   </div>
 
                   <div className="space-y-1.5">
                     <p className="text-[11px] font-semibold text-zinc-500">
-                      1. 촬영 방향 (앞핏 vs 등판·백프린트)
-                    </p>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setLookbookPoseAngle('front')}
-                        className={`py-2 px-2.5 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
-                          lookbookPoseAngle === 'front'
-                            ? isDarkMode
-                              ? 'border-rose-500 bg-rose-600 text-white'
-                              : 'border-zinc-900 bg-zinc-900 text-white'
-                            : isDarkMode
-                            ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-700'
-                            : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'
-                        }`}
-                      >
-                        정면 모델샷 (앞핏)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setLookbookPoseAngle('back')}
-                        className={`py-2 px-2.5 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
-                          lookbookPoseAngle === 'back'
-                            ? isDarkMode
-                              ? 'border-rose-500 bg-rose-600 text-white'
-                              : 'border-zinc-900 bg-zinc-900 text-white'
-                            : isDarkMode
-                            ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-700'
-                            : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'
-                        }`}
-                      >
-                        뒷모습 모델샷 (등판 강조)
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <p className="text-[11px] font-semibold text-zinc-500">
-                      2. 착장 모델 선택 (내 사진 피팅 지원)
+                      착장 모델 선택 (내 사진 피팅 지원)
                     </p>
                     <div className="grid grid-cols-2 gap-1.5">
                       {LOOKBOOK_FIT_TARGETS.map((t) => {
@@ -4014,48 +4305,221 @@ export default function AuraFitClient() {
                           </div>
                         ) : stylistResult.lookbookImage &&
                           lookbookViewMode === 'photo' ? (
-                          <div className="my-2 relative flex-1 flex flex-col justify-between z-10">
-                            <div
-                              onClick={() =>
-                                setZoomLookbookUrl(
-                                  stylistResult.lookbookImage || ''
-                                )
-                              }
-                              title="터치하면 원본 해상도로 크게 확대됩니다"
-                              className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-zinc-200 shadow-sm bg-white cursor-zoom-in group"
-                            >
-                              <img
-                                referrerPolicy="no-referrer"
-                                src={stylistResult.lookbookImage}
-                                alt={stylistResult.title}
-                                className="w-full h-full object-cover transition duration-300 group-hover:scale-[1.02]"
-                              />
-                              <span className="absolute bottom-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[10px] font-semibold backdrop-blur-sm">
-                                터치하여 확대 ⤢
-                              </span>
-                            </div>
+                          <div className="my-2 relative flex-1 flex flex-col justify-between z-10 space-y-2.5">
+                            {(() => {
+                              const anglesMap =
+                                stylistResult.lookbookAngles || {
+                                  front: stylistResult.lookbookImage,
+                                };
+                              const currentAngleImg =
+                                anglesMap[lookbookPoseAngle];
+                              const isCurrentLoading = Boolean(
+                                loadingAngles[lookbookPoseAngle]
+                              );
+                              const currentAngleMeta =
+                                STUDIO_ANGLES.find(
+                                  (a) => a.id === lookbookPoseAngle
+                                ) || STUDIO_ANGLES[0];
 
-                            <div className="mt-2.5 flex items-center justify-between gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => generateLookbookPhoto()}
-                                className="flex-1 py-2 px-2.5 rounded-lg bg-black/80 text-white text-[11px] font-bold hover:bg-black transition flex items-center justify-center gap-1 cursor-pointer"
-                              >
-                                <RefreshCw className="w-3 h-3" /> 다른 구도 재촬영
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  downloadLookbookImage(
-                                    stylistResult.lookbookImage || '',
-                                    stylistResult.title
-                                  )
-                                }
-                                className="py-2 px-3 rounded-lg bg-white text-zinc-900 border border-zinc-200 text-[11px] font-bold hover:bg-zinc-100 transition flex items-center justify-center gap-1 cursor-pointer"
-                              >
-                                <Download className="w-3 h-3" /> 저장
-                              </button>
-                            </div>
+                              return (
+                                <>
+                                  <div
+                                    onTouchStart={(e) =>
+                                      setCarouselTouchStartX(
+                                        e.touches[0]?.clientX ?? null
+                                      )
+                                    }
+                                    onTouchEnd={(e) => {
+                                      if (carouselTouchStartX === null) return;
+                                      const endX =
+                                        e.changedTouches[0]?.clientX ??
+                                        carouselTouchStartX;
+                                      const diff = endX - carouselTouchStartX;
+                                      setCarouselTouchStartX(null);
+                                      if (Math.abs(diff) > 35) {
+                                        setLookbookPoseAngle((prev) =>
+                                          stepCarouselAngle(
+                                            prev,
+                                            diff < 0 ? 1 : -1
+                                          )
+                                        );
+                                      }
+                                    }}
+                                    onClick={() => {
+                                      if (currentAngleImg) {
+                                        openLightboxCarousel(
+                                          anglesMap,
+                                          currentAngleImg,
+                                          lookbookPoseAngle
+                                        );
+                                      }
+                                    }}
+                                    title="좌우 화살표·스와이프로 4면을 넘겨보거나 터치해 크게 확대하세요"
+                                    className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-zinc-200 shadow-sm bg-white cursor-zoom-in group select-none"
+                                  >
+                                    {currentAngleImg && !isCurrentLoading ? (
+                                      <img
+                                        referrerPolicy="no-referrer"
+                                        src={currentAngleImg}
+                                        alt={`${stylistResult.title} - ${currentAngleMeta.label}`}
+                                        className="w-full h-full object-cover transition duration-300"
+                                      />
+                                    ) : (
+                                      <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-zinc-50 text-zinc-700 space-y-2.5">
+                                        {isCurrentLoading ? (
+                                          <>
+                                            <div className="w-9 h-9 border-3 border-zinc-300 border-t-zinc-900 rounded-full animate-spin" />
+                                            <p className="text-xs font-bold">
+                                              {currentAngleMeta.label} 모델샷을 현상하고 있습니다...
+                                            </p>
+                                            <p className="text-[10px] text-zinc-400">
+                                              정면 모델과 동일한 코디·조명으로 회전 구도를 맞추는 중입니다 (약 8~12초)
+                                            </p>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <p className="text-xs font-bold text-zinc-500">
+                                              아직 {currentAngleMeta.label} 컷이 생성되지 않았습니다.
+                                            </p>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                void generateLookbookPhoto(
+                                                  undefined,
+                                                  undefined,
+                                                  lookbookPoseAngle
+                                                );
+                                              }}
+                                              className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-[11px] font-bold cursor-pointer"
+                                            >
+                                              {currentAngleMeta.label} 컷 바로 촬영하기
+                                            </button>
+                                          </>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-white text-[10px] font-bold backdrop-blur-sm">
+                                      {currentAngleMeta.stepBadge}
+                                    </span>
+
+                                    {/* 좌·우 쇼핑몰 슬라이드 넘기기 화살표 */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setLookbookPoseAngle((prev) =>
+                                          stepCarouselAngle(prev, -1)
+                                        );
+                                      }}
+                                      aria-label="이전 각도 보기"
+                                      className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/90 hover:bg-white text-zinc-900 border border-zinc-200 shadow-md flex items-center justify-center transition cursor-pointer"
+                                    >
+                                      <ChevronLeft className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setLookbookPoseAngle((prev) =>
+                                          stepCarouselAngle(prev, 1)
+                                        );
+                                      }}
+                                      aria-label="다음 각도 보기"
+                                      className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/90 hover:bg-white text-zinc-900 border border-zinc-200 shadow-md flex items-center justify-center transition cursor-pointer"
+                                    >
+                                      <ChevronRight className="w-4 h-4" />
+                                    </button>
+
+                                    {currentAngleImg && !isCurrentLoading && (
+                                      <span className="absolute bottom-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[10px] font-semibold backdrop-blur-sm">
+                                        확대 ⤢
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* 정면 · 좌측면 · 우측면 · 뒷면 원터치 탭 바 */}
+                                  <div className="grid grid-cols-4 gap-1">
+                                    {STUDIO_ANGLES.map((ang) => {
+                                      const active =
+                                        lookbookPoseAngle === ang.id;
+                                      const ready = Boolean(anglesMap[ang.id]);
+                                      const busy = Boolean(
+                                        loadingAngles[ang.id]
+                                      );
+                                      return (
+                                        <button
+                                          key={ang.id}
+                                          type="button"
+                                          onClick={() =>
+                                            setLookbookPoseAngle(ang.id)
+                                          }
+                                          className={`py-1.5 px-1 rounded-lg border text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+                                            active
+                                              ? 'border-zinc-900 bg-zinc-900 text-white'
+                                              : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-zinc-400'
+                                          }`}
+                                        >
+                                          <span>{ang.label}</span>
+                                          {busy ? (
+                                            <span className="w-2 h-2 rounded-full border border-current border-t-transparent animate-spin" />
+                                          ) : ready ? (
+                                            <span
+                                              className={`w-1.5 h-1.5 rounded-full ${
+                                                active
+                                                  ? 'bg-emerald-400'
+                                                  : 'bg-emerald-500'
+                                              }`}
+                                            />
+                                          ) : null}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+
+                                  <div className="flex items-center justify-between gap-1.5">
+                                    <button
+                                      type="button"
+                                      disabled={isCurrentLoading}
+                                      onClick={() =>
+                                        generateLookbookPhoto(
+                                          undefined,
+                                          undefined,
+                                          lookbookPoseAngle
+                                        )
+                                      }
+                                      className="flex-1 py-2 px-2 rounded-lg bg-zinc-100 text-zinc-800 border border-zinc-200 text-[10px] font-bold hover:bg-zinc-200 disabled:opacity-50 transition flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <RefreshCw className="w-3 h-3" />{' '}
+                                      {currentAngleMeta.label}만 재촬영
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => generateLookbookPhoto()}
+                                      className="flex-1 py-2 px-2 rounded-lg bg-zinc-900 text-white text-[10px] font-bold hover:opacity-90 transition flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <RefreshCw className="w-3 h-3" /> 4면 전체 재촬영
+                                    </button>
+                                    {currentAngleImg && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          downloadLookbookImage(
+                                            currentAngleImg,
+                                            `${stylistResult.title}_${lookbookPoseAngle}`
+                                          )
+                                        }
+                                        className="py-2 px-2.5 rounded-lg bg-white text-zinc-900 border border-zinc-200 text-[10px] font-bold hover:bg-zinc-100 transition flex items-center justify-center cursor-pointer"
+                                        title="현재 보고 있는 면 이미지 저장"
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </>
+                              );
+                            })()}
                           </div>
                         ) : (
                           <>
@@ -4576,25 +5040,81 @@ export default function AuraFitClient() {
                       </button>
                     </div>
                     <h4 className="text-sm font-bold">{look.title}</h4>
-                    {look.lookbookImage && (
-                      <div
-                        onClick={() =>
-                          setZoomLookbookUrl(look.lookbookImage || '')
-                        }
-                        title="터치하면 AI 착장 화보를 크게 확대합니다"
-                        className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-zinc-200 bg-white cursor-zoom-in group"
-                      >
-                        <img
-                          referrerPolicy="no-referrer"
-                          src={look.lookbookImage}
-                          alt={look.title}
-                          className="w-full h-full object-cover transition duration-300 group-hover:scale-[1.02]"
-                        />
-                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/75 text-white text-[10px] font-bold backdrop-blur-sm">
-                          📸 {look.stylePresetLabel || 'AI 착장 화보'}
-                        </span>
-                      </div>
-                    )}
+                    {look.lookbookImage &&
+                      (() => {
+                        const sAngles = look.lookbookAngles || {
+                          front: look.lookbookImage,
+                        };
+                        const curAng: LookbookPoseAngle =
+                          savedCardAngleMap[look.id] || 'front';
+                        const curSrc =
+                          sAngles[curAng] || look.lookbookImage || '';
+                        const hasMulti = Object.keys(sAngles).length > 1;
+                        const angLabel =
+                          STUDIO_ANGLES.find((a) => a.id === curAng)?.label ||
+                          '정면';
+                        return (
+                          <div className="space-y-1.5">
+                            <div
+                              onClick={() =>
+                                openLightboxCarousel(
+                                  sAngles,
+                                  curSrc,
+                                  curAng
+                                )
+                              }
+                              title="터치하면 4면 모델샷 뷰어를 크게 엽니다"
+                              className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-zinc-200 bg-white cursor-zoom-in group select-none"
+                            >
+                              <img
+                                referrerPolicy="no-referrer"
+                                src={curSrc}
+                                alt={`${look.title} - ${angLabel}`}
+                                className="w-full h-full object-cover transition duration-300"
+                              />
+                              <span className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/75 text-white text-[10px] font-bold backdrop-blur-sm">
+                                📸 {angLabel} · {look.stylePresetLabel || '화이트 스튜디오'}
+                              </span>
+                              {hasMulti && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSavedCardAngleMap((prev) => ({
+                                        ...prev,
+                                        [look.id]: stepCarouselAngle(
+                                          prev[look.id] || 'front',
+                                          -1
+                                        ),
+                                      }));
+                                    }}
+                                    className="absolute left-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-white/90 text-zinc-900 border border-zinc-200 shadow flex items-center justify-center cursor-pointer"
+                                  >
+                                    <ChevronLeft className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSavedCardAngleMap((prev) => ({
+                                        ...prev,
+                                        [look.id]: stepCarouselAngle(
+                                          prev[look.id] || 'front',
+                                          1
+                                        ),
+                                      }));
+                                    }}
+                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-white/90 text-zinc-900 border border-zinc-200 shadow flex items-center justify-center cursor-pointer"
+                                  >
+                                    <ChevronRight className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     <div className="grid grid-cols-3 gap-2">
                       {look.items.slice(0, 3).map((i) => (
                         <img
@@ -4627,7 +5147,7 @@ export default function AuraFitClient() {
       >
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="font-medium">
-            © 2026 OBLIQUE · AI Digital Closet & Styling Platform
+            © 2026 오블리크 (OBLIQUE) · AI 디지털 옷장 & 코디 스타일링 플랫폼
           </p>
           <div className="flex items-center gap-4">
             <a
@@ -6348,25 +6868,51 @@ export default function AuraFitClient() {
         </div>
       )}
 
-      {/* MODAL 5: AI 착장 화보 고해상도 확대 뷰어 (Lightbox) */}
+      {/* MODAL 5: AI 4면 착장 모델샷 고해상도 슬라이드 뷰어 (Lightbox) */}
       {zoomLookbookUrl && (
         <div
-          onClick={() => setZoomLookbookUrl('')}
+          onClick={() => {
+            setZoomLookbookUrl('');
+            setZoomLookbookAngles(null);
+          }}
           className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="relative max-w-md w-full bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl p-3 space-y-3"
+            onTouchStart={(e) =>
+              setCarouselTouchStartX(e.touches[0]?.clientX ?? null)
+            }
+            onTouchEnd={(e) => {
+              if (carouselTouchStartX === null || !zoomLookbookAngles) return;
+              const endX = e.changedTouches[0]?.clientX ?? carouselTouchStartX;
+              const diff = endX - carouselTouchStartX;
+              setCarouselTouchStartX(null);
+              if (Math.abs(diff) > 35) {
+                const next = stepCarouselAngle(
+                  zoomActiveAngle,
+                  diff < 0 ? 1 : -1
+                );
+                const nextUrl = zoomLookbookAngles[next];
+                if (nextUrl) {
+                  setZoomActiveAngle(next);
+                  setZoomLookbookUrl(nextUrl);
+                }
+              }
+            }}
+            className="relative max-w-md w-full bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl p-3 space-y-3 select-none"
           >
             <div className="flex items-center justify-between px-1 text-white">
               <span className="text-xs font-bold flex items-center gap-1.5">
-                <Camera className="w-3.5 h-3.5 text-rose-500" /> OBLIQUE 화이트 스튜디오 모델샷 뷰어
+                <Camera className="w-3.5 h-3.5 text-rose-500" /> OBLIQUE 화이트 스튜디오 4면 뷰어
               </span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() =>
-                    downloadLookbookImage(zoomLookbookUrl, 'OBLIQUE_Editorial')
+                    downloadLookbookImage(
+                      zoomLookbookUrl,
+                      `OBLIQUE_Studio_${zoomActiveAngle}`
+                    )
                   }
                   className="px-2.5 py-1 rounded-lg bg-white text-zinc-900 text-[11px] font-bold hover:bg-zinc-200 transition flex items-center gap-1 cursor-pointer"
                 >
@@ -6374,19 +6920,87 @@ export default function AuraFitClient() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setZoomLookbookUrl('')}
+                  onClick={() => {
+                    setZoomLookbookUrl('');
+                    setZoomLookbookAngles(null);
+                  }}
                   className="p-1 rounded-lg bg-zinc-800 text-zinc-300 hover:text-white cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
             </div>
-            <img
-              referrerPolicy="no-referrer"
-              src={zoomLookbookUrl}
-              alt="OBLIQUE AI 착장 화보 확대"
-              className="w-full max-h-[78vh] object-contain rounded-xl bg-white"
-            />
+
+            <div className="relative">
+              <img
+                referrerPolicy="no-referrer"
+                src={zoomLookbookUrl}
+                alt="OBLIQUE AI 착장 모델샷 확대"
+                className="w-full max-h-[72vh] object-contain rounded-xl bg-white"
+              />
+              {zoomLookbookAngles &&
+                Object.keys(zoomLookbookAngles).length > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = stepCarouselAngle(zoomActiveAngle, -1);
+                        const nextUrl = zoomLookbookAngles[next];
+                        if (nextUrl) {
+                          setZoomActiveAngle(next);
+                          setZoomLookbookUrl(nextUrl);
+                        }
+                      }}
+                      className="absolute left-2.5 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white/95 hover:bg-white text-zinc-900 border border-zinc-200 shadow-lg flex items-center justify-center cursor-pointer"
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = stepCarouselAngle(zoomActiveAngle, 1);
+                        const nextUrl = zoomLookbookAngles[next];
+                        if (nextUrl) {
+                          setZoomActiveAngle(next);
+                          setZoomLookbookUrl(nextUrl);
+                        }
+                      }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white/95 hover:bg-white text-zinc-900 border border-zinc-200 shadow-lg flex items-center justify-center cursor-pointer"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </>
+                )}
+            </div>
+
+            {zoomLookbookAngles && (
+              <div className="grid grid-cols-4 gap-1.5 pt-0.5">
+                {STUDIO_ANGLES.map((ang) => {
+                  const url = zoomLookbookAngles[ang.id];
+                  const active = zoomActiveAngle === ang.id;
+                  return (
+                    <button
+                      key={ang.id}
+                      type="button"
+                      disabled={!url}
+                      onClick={() => {
+                        if (url) {
+                          setZoomActiveAngle(ang.id);
+                          setZoomLookbookUrl(url);
+                        }
+                      }}
+                      className={`py-1.5 rounded-lg text-[11px] font-bold transition cursor-pointer disabled:opacity-35 ${
+                        active
+                          ? 'bg-white text-zinc-950'
+                          : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+                      }`}
+                    >
+                      {ang.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
