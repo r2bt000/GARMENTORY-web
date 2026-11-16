@@ -81,6 +81,7 @@ interface ProfileAndClosetProps {
     prop: Proposal,
     reply: ProposalReply
   ) => Promise<void>;
+  onDeleteProposal: (targetUserId: string, prop: Proposal) => Promise<void>;
   onAdoptProposalToSaved: (prop: Proposal) => Promise<void>;
 }
 
@@ -159,6 +160,7 @@ export default function ProfileAndClosetSection({
   onToggleLikeProposal,
   onAddProposalReply,
   onDeleteProposalReply,
+  onDeleteProposal,
   onAdoptProposalToSaved,
 }: ProfileAndClosetProps) {
   const [portalReady, setPortalReady] = useState<boolean>(false);
@@ -240,7 +242,6 @@ export default function ProfileAndClosetSection({
     };
   }, [followModalType]);
 
-  // 검색어 변경 시 무한 스크롤 초기 배치 리셋
   useEffect(() => {
     setVisibleFollowCount(FOLLOW_BATCH_SIZE);
   }, [followFilterQuery]);
@@ -1084,7 +1085,7 @@ export default function ProfileAndClosetSection({
         </div>
       )}
 
-      {/* 3D. 받은 코디 제안 서브 뷰 (1인 1회 하트 토글 + 간단 코멘트 답글 기능!) */}
+      {/* 3D. 받은 코디 제안 서브 뷰 (1인 1회 하트 토글 + 답글 + 받은 코디 제안 삭제 버튼!) */}
       {activeProposalsView && (
         <div>
           {profileUser.proposals.length === 0 ? (
@@ -1108,6 +1109,10 @@ export default function ProfileAndClosetSection({
                   (prop.proposerUserId
                     ? avatarByUserId.get(prop.proposerUserId)
                     : undefined);
+                const canDeleteThisProposal = Boolean(
+                  mode === 'my' ||
+                    (myUserId && prop.proposerUserId === myUserId)
+                );
 
                 return (
                   <div
@@ -1115,7 +1120,7 @@ export default function ProfileAndClosetSection({
                     className="rounded-3xl bg-[#F7F7F8] p-5 space-y-4 flex flex-col justify-between"
                   >
                     <div className="space-y-4">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <button
                           type="button"
                           onClick={() => {
@@ -1126,18 +1131,36 @@ export default function ProfileAndClosetSection({
                               );
                             }
                           }}
-                          className="inline-flex items-center gap-2 text-xs font-extrabold text-zinc-950 hover:opacity-75 cursor-pointer"
+                          className="inline-flex items-center gap-2 text-xs font-extrabold text-zinc-950 hover:opacity-75 cursor-pointer min-w-0"
                         >
                           <ProfileAvatar
                             avatarUrl={propAvatar}
                             handle={prop.proposer}
                             sizeClass="w-6 h-6 text-[10px]"
                           />
-                          <span>{prop.proposer} 님의 코디 제안</span>
+                          <span className="truncate">
+                            {prop.proposer} 님의 코디 제안
+                          </span>
                         </button>
-                        <span className="text-[11px] text-zinc-400">
-                          {prop.createdAt}
-                        </span>
+
+                        <div className="flex items-center gap-2.5 shrink-0">
+                          <span className="text-[11px] text-zinc-400">
+                            {prop.createdAt}
+                          </span>
+                          {canDeleteThisProposal && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void onDeleteProposal(profileUser.id, prop)
+                              }
+                              title="코디 제안 삭제"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white hover:bg-zinc-200/80 text-[11px] font-semibold text-zinc-500 hover:text-zinc-950 transition cursor-pointer"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>삭제</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-4 gap-2">
@@ -1147,7 +1170,7 @@ export default function ProfileAndClosetSection({
                               referrerPolicy="no-referrer"
                               src={it.image}
                               alt={it.name}
-                              className="aspect-square rounded-xl object-cover bg-white"
+                              className="aspect-square rounded-xl object-cover bg-[#F4F4F5]"
                             />
                             <p className="text-[10px] font-semibold text-zinc-700 truncate">
                               {it.name}

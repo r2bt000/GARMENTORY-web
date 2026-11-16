@@ -1,5 +1,5 @@
 -- =====================================================================
--- 873oc 소셜 업데이트 (STYLE 피드 · 착용 옷장 태그 · 팔로우 · 전체 공개 옷장)
+-- 873oc 소셜 업데이트 (STYLE 피드 · 착용 옷장 태그 · 팔로우 · 전체 공개 옷장 · 코디 제안 삭제)
 -- 실행 위치: Supabase Dashboard -> SQL Editor -> New Query 붙여넣기 후 [Run] 클릭
 -- 기존 wardrobe_items(옷장), saved_looks(룩북), profiles 데이터는 100% 그대로 보존됩니다.
 -- =====================================================================
@@ -19,6 +19,12 @@ drop policy if exists "Wardrobe viewable if owner or public profile" on public.w
 create policy "Wardrobe viewable if owner or public profile"
   on public.wardrobe_items for select
   using (true);
+
+-- 받은 코디 제안 삭제 권한 보장 (옷장 주인 본인 또는 제안 작성자 삭제 허용)
+drop policy if exists "Target user or proposer can delete proposal" on public.outfit_proposals;
+create policy "Target user or proposer can delete proposal"
+  on public.outfit_proposals for delete
+  using (auth.uid() = target_user_id or auth.uid() = proposer_user_id);
 
 -- 2. STYLE 착샷 피드 게시물 테이블 (착용한 내 옷장 아이템 태그 JSONB 포함)
 create table if not exists public.style_posts (

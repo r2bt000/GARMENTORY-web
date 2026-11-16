@@ -33,6 +33,8 @@ interface StudioSectionProps {
   onSelectGenre: (g: string) => void;
   activeDetails: string[];
   onToggleDetail: (d: string) => void;
+  customDetailNote: string;
+  onChangeCustomDetailNote: (v: string) => void;
   lookbookConcept: LookbookConceptId;
   onSelectConcept: (c: LookbookConceptId) => void;
   lookbookFitTarget: LookbookFitTarget;
@@ -66,6 +68,8 @@ export default function StudioSection({
   onSelectGenre,
   activeDetails,
   onToggleDetail,
+  customDetailNote,
+  onChangeCustomDetailNote,
   lookbookConcept,
   onSelectConcept,
   lookbookFitTarget,
@@ -159,6 +163,35 @@ export default function StudioSection({
                 );
               })}
             </div>
+          </div>
+
+          {/* 세세한 코디 디테일 직접 입력 칸 */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-extrabold text-zinc-900">
+                세부 코디 디테일 입력
+              </span>
+              {customDetailNote ? (
+                <button
+                  type="button"
+                  onClick={() => onChangeCustomDetailNote('')}
+                  className="text-[10px] font-semibold text-zinc-400 hover:text-zinc-900 cursor-pointer"
+                >
+                  지우기
+                </button>
+              ) : (
+                <span className="text-[10px] font-medium text-zinc-400">
+                  기본: 상의 빼입
+                </span>
+              )}
+            </div>
+            <textarea
+              rows={2}
+              value={customDetailNote}
+              onChange={(e) => onChangeCustomDetailNote(e.target.value)}
+              placeholder="예: 아우터 지퍼는 열고 착용, 소매 살짝 롤업, 바지 밑단이 신발을 자연스럽게 덮도록 연출..."
+              className="w-full rounded-2xl bg-white p-3 text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-900 resize-none leading-relaxed"
+            />
           </div>
 
           <div className="space-y-3 pt-2 border-t border-zinc-200/60">

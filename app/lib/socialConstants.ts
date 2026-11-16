@@ -363,10 +363,13 @@ export function formatRelativeTime(iso?: string): string {
   });
 }
 
+// iOS Safari 등 WebP 인코딩 미지원 브라우저에서 JPEG 폴백 시 투명 배경이 검은색(#000000)으로 변하는 현상을 막기 위해
+// 캔버스 바닥에 KREAM 스타일 밝은 스튜디오 톤(#F4F4F5)을 먼저 채운 뒤 이미지를 합성합니다.
 export async function compressImageToWebP(
   file: File,
   maxEdge = 1280,
-  quality = 0.84
+  quality = 0.84,
+  bgColor = '#F4F4F5'
 ): Promise<{
   blob: Blob;
   dataUrl: string;
@@ -403,6 +406,8 @@ export async function compressImageToWebP(
           reject(new Error('Canvas context unavailable'));
           return;
         }
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
         let dataUrl = canvas.toDataURL('image/webp', quality);
@@ -440,7 +445,8 @@ export async function compressImageToWebP(
 export async function compressDataUrlToWebP(
   srcDataUrl: string,
   maxEdge = 1080,
-  quality = 0.84
+  quality = 0.84,
+  bgColor = '#F4F4F5'
 ): Promise<{
   blob: Blob | null;
   dataUrl: string;
@@ -482,7 +488,10 @@ export async function compressDataUrlToWebP(
         });
         return;
       }
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
       let outUrl = canvas.toDataURL('image/webp', quality);
       let ext: 'webp' | 'jpg' = 'webp';
       let mimeType = 'image/webp';

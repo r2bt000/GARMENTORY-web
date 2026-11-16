@@ -44,7 +44,7 @@ import {
   stripWardrobeMetaHash,
 } from './lib/socialConstants';
 
-function parseProposalRow(p: Record<string, unknown>): Proposal {
+function parseProposalRow(p: Record<string, unknown>): Proposal | null {
   const rawSnap = p.items_snapshot;
   let itemsSnapshot: ClothItem[] = [];
   let likedUserIds: string[] = [];
@@ -55,6 +55,9 @@ function parseProposalRow(p: Record<string, unknown>): Proposal {
     itemsSnapshot = rawSnap as ClothItem[];
   } else if (rawSnap && typeof rawSnap === 'object') {
     const obj = rawSnap as Record<string, unknown>;
+    if (obj.deleted === true) {
+      return null;
+    }
     if (Array.isArray(obj.items)) {
       itemsSnapshot = obj.items as ClothItem[];
     }
@@ -145,6 +148,7 @@ export default function AuraFitClient() {
     '와이드 실루엣',
     '모노톤 매치',
   ]);
+  const [customDetailNote, setCustomDetailNote] = useState<string>('');
   const [lookbookConcept, setLookbookConcept] =
     useState<LookbookConceptId>('street');
   const [lookbookFitTarget, setLookbookFitTarget] =
@@ -563,6 +567,7 @@ export default function AuraFitClient() {
           ? (allProps || [])
               .filter((p) => p.target_user_id === user.id)
               .map((p) => parseProposalRow(p as Record<string, unknown>))
+              .filter((p): p is Proposal => p !== null)
           : [];
 
         const liveOthers: CommunityUser[] = (pubProfiles || [])
@@ -596,7 +601,8 @@ export default function AuraFitClient() {
 
             const uProps: Proposal[] = (allProps || [])
               .filter((p) => p.target_user_id === prof.id)
-              .map((p) => parseProposalRow(p as Record<string, unknown>));
+              .map((p) => parseProposalRow(p as Record<string, unknown>))
+              .filter((p): p is Proposal => p !== null);
 
             const av =
               (typeof prof.avatar_url === 'string' && prof.avatar_url) ||
@@ -1348,6 +1354,7 @@ export default function AuraFitClient() {
           fitTarget: lookbookFitTarget,
           activeGenre: activeGenreVal,
           selectedDetails: activeDetails,
+          customDetailNote: customDetailNote.trim(),
           garments: preparedGarments,
           userModelImage: preparedUserPhoto,
         }),
@@ -1422,6 +1429,7 @@ export default function AuraFitClient() {
           activeGenre: selectedGenre,
           items: picked.map((p) => ({ name: p.name, category: p.category })),
           selectedDetails: activeDetails,
+          customDetailNote: customDetailNote.trim(),
           budget: '합리적 매치',
         }),
       });
@@ -2213,6 +2221,53 @@ export default function AuraFitClient() {
     showToast('답글이 삭제되었습니다.');
   };
 
+  const handleDeleteProposal = async (
+    targetUserId: string,
+    prop: Proposal
+  ) => {
+    if (!authUser) {
+      setAuthModalOpen(true);
+      return;
+    }
+    const canDelete =
+      targetUserId === 'me' ||
+      targetUserId === authUser.id ||
+      prop.proposerUserId === authUser.id;
+    if (!canDelete) return;
+
+    setCommunityUsers((prev) =>
+      prev.map((u) =>
+        u.id === targetUserId || (targetUserId === 'me' && u.id === 'me')
+          ? { ...u, proposals: u.proposals.filter((p) => p.id !== prop.id) }
+          : u
+      )
+    );
+
+    if (supabaseClient && !prop.id.startsWith('prop_')) {
+      const { data: delData, error: delErr } = await supabaseClient
+        .from('outfit_proposals')
+        .delete()
+        .eq('id', prop.id)
+        .select('id');
+
+      if (delErr || !Array.isArray(delData) || delData.length === 0) {
+        await supabaseClient
+          .from('outfit_proposals')
+          .update({
+            likes: 0,
+            items_snapshot: {
+              deleted: true,
+              items: [],
+              likedUserIds: [],
+              replies: [],
+            },
+          })
+          .eq('id', prop.id);
+      }
+    }
+    showToast('코디 제안이 삭제되었습니다.');
+  };
+
   const handleAdoptProposalToSaved = async (prop: Proposal) => {
     const matchedItems =
       prop.itemsSnapshot && prop.itemsSnapshot.length > 0
@@ -2522,6 +2577,8 @@ export default function AuraFitClient() {
                   : [...prev, det]
               )
             }
+            customDetailNote={customDetailNote}
+            onChangeCustomDetailNote={setCustomDetailNote}
             lookbookConcept={lookbookConcept}
             onSelectConcept={setLookbookConcept}
             lookbookFitTarget={lookbookFitTarget}
@@ -2585,6 +2642,7 @@ export default function AuraFitClient() {
             onToggleLikeProposal={handleToggleLikeProposal}
             onAddProposalReply={handleAddProposalReply}
             onDeleteProposalReply={handleDeleteProposalReply}
+            onDeleteProposal={handleDeleteProposal}
             onAdoptProposalToSaved={handleAdoptProposalToSaved}
           />
         )}
@@ -2638,6 +2696,7 @@ export default function AuraFitClient() {
             onToggleLikeProposal={handleToggleLikeProposal}
             onAddProposalReply={handleAddProposalReply}
             onDeleteProposalReply={handleDeleteProposalReply}
+            onDeleteProposal={handleDeleteProposal}
             onAdoptProposalToSaved={handleAdoptProposalToSaved}
           />
         )}

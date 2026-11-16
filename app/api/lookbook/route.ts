@@ -24,6 +24,7 @@ interface LookbookRequestBody {
   fitTarget: FitTargetId;
   activeGenre: string;
   selectedDetails?: string[];
+  customDetailNote?: string;
   garments: GarmentInput[];
   userModelImage?: string;
   preferredEngine?: 'gemini' | 'fashn';
@@ -265,7 +266,7 @@ export async function POST(request: Request) {
         success: false,
         missingKey: true,
         message:
-          'AI 모델샷 엔진을 작동하려면 GEMINI_API_KEY가 필요합니다. 우측 상단 설정 창에 키를 입력하거나 Vercel 환경변수(GEMINI_API_KEY)에 등록해 주세요.',
+          'AI 모델샷 엔진을 작동하려면 GEMINI_API_KEY가 필요합니다. Vercel 환경변수(GEMINI_API_KEY)에 키를 등록해 주세요.',
       });
     }
 
@@ -340,8 +341,6 @@ export async function POST(request: Request) {
     }
 
     // 3) 모델 외형 및 포즈 디렉션
-    // - 남성: 기존 한국 남성 패션 룩북 모델 느낌 그대로 유지
-    // - 여성: 아이돌 비주얼 센터급 실사 미모 + 세련된 고양이상·여우상 이목구비 집중 반영!
     let subjectDirection =
       'A clean-cut Korean male fashion lookbook model in his mid-20s standing in a relaxed, natural straight-on 0-degree FRONT-FACING full-body pose from head to shoes (entire head and shoes fully visible inside frame, facing directly toward the camera).';
     let presetBadgeLabel = `${conceptLabel} · 남성 모델`;
@@ -368,11 +367,25 @@ export async function POST(request: Request) {
     const detailKeywords = Array.isArray(body.selectedDetails)
       ? body.selectedDetails.slice(0, 6).join(', ')
       : '';
+    const customNoteClean = String(body.customDetailNote || '')
+      .trim()
+      .slice(0, 300);
+
+    // 사용자가 직접 세부 입력란에 '넣입 / 넣어 입기 / tuck in'을 명시하지 않은 한,
+    // 모든 티셔츠·셔츠·맨투맨·니트 등 상의 밑단은 바지 밖으로 자연스럽게 빼서 입는(빼입 / UNTUCKED) 실루엣을 기본 고정!
+    const explicitlyWantsTuckIn =
+      /(넣입|넣어\s*입|넣어서\s*입|바지\s*안으로\s*넣|바지에\s*넣|턱인|tuck\s*in|tucked\s*in|french\s*tuck)/i.test(
+        customNoteClean
+      );
+
+    const topHemRule = explicitlyWantsTuckIn
+      ? 'Top Hem Styling: Follow the user custom styling request below regarding tucking the top.'
+      : 'Top Hem Styling Rule (STRICT DEFAULT — UNTUCKED / 빼입): Wear ALL t-shirts, shirts, sweatshirts, hoodies, knitwear, and tops NATURALLY UNTUCKED with the bottom hem hanging cleanly, relaxed, and loose outside OVER the waistband of the pants/trousers. NEVER tuck the t-shirt or top inside the pants waistband.';
 
     const selectedCategories = garments.map((g) => g.category);
     const missingBasicsParts: string[] = [];
     if (!selectedCategories.includes('상의'))
-      missingBasicsParts.push('a clean plain solid neutral inner t-shirt');
+      missingBasicsParts.push('a clean plain solid neutral untucked inner t-shirt');
     if (!selectedCategories.includes('하의'))
       missingBasicsParts.push('clean minimal wide-fit trousers');
     if (!selectedCategories.includes('신발'))
@@ -389,9 +402,11 @@ export async function POST(request: Request) {
       ? STREET_SNAP_FRONT_DIRECTION
       : WHITE_STUDIO_FRONT_DIRECTION;
 
-    const masterPrompt = [
+    const masterPromptLines = [
       `Generate ONE single photorealistic vertical 3:4 FRONT-FACING ${
-        isStreet ? 'Korean street-snap fashion photograph' : 'white studio catalog model photograph'
+        isStreet
+          ? 'Korean street-snap fashion photograph'
+          : 'white studio catalog model photograph'
       } (strictly FRONT view only — NO back view, NO side view, NO multi-panel collage, NO split screen, NO text, NO watermarks).`,
       `Styling Genre Reference: ${String(body.activeGenre || '미니멀').slice(0, 40)}${
         detailKeywords ? ` (${detailKeywords})` : ''
@@ -400,8 +415,20 @@ export async function POST(request: Request) {
       'Selected Wardrobe Items to Wear:',
       ...referenceMappingLines,
       autoCompleteNote,
-      `Environment, Background & Lighting (STRICT): ${environmentDirection}`,
-    ].join('\n');
+      topHemRule,
+    ];
+
+    if (customNoteClean) {
+      masterPromptLines.push(
+        `User Custom Styling & Fit Directives (HIGHEST PRIORITY — MUST FOLLOW CLOSELY): "${customNoteClean}"`
+      );
+    }
+
+    masterPromptLines.push(
+      `Environment, Background & Lighting (STRICT): ${environmentDirection}`
+    );
+
+    const masterPrompt = masterPromptLines.join('\n');
 
     parts.push({ text: masterPrompt });
 
