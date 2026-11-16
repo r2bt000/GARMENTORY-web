@@ -74,6 +74,12 @@ interface CommunityUser {
   proposals: Proposal[];
 }
 
+type LookbookPresetId =
+  | 'editorial_street'
+  | 'minimal_studio'
+  | 'underground_flash';
+type LookbookFitTarget = 'crop_fit' | 'female' | 'male' | 'my_photo';
+
 interface SavedLook {
   id: number;
   genre: string;
@@ -81,6 +87,8 @@ interface SavedLook {
   title: string;
   items: ClothItem[];
   note: string;
+  lookbookImage?: string;
+  stylePresetLabel?: string;
 }
 
 interface Article {
@@ -121,6 +129,9 @@ interface StylistResult {
   filterSummary: string;
   mode: 'DAY' | 'NIGHT';
   genre: string;
+  lookbookImage?: string;
+  lookbookEngine?: string;
+  lookbookPresetLabel?: string;
 }
 
 interface ApiConfig {
@@ -424,6 +435,153 @@ const compressImageToWebP = (
   });
 };
 
+const compressDataUrlToWebP = (
+  srcDataUrl: string,
+  maxDimension = 1024,
+  quality = 0.84
+): Promise<{
+  blob: Blob | null;
+  dataUrl: string;
+  ext: 'webp' | 'jpg';
+  mimeType: string;
+}> => {
+  return new Promise((resolve) => {
+    if (
+      !srcDataUrl ||
+      !srcDataUrl.startsWith('data:image/') ||
+      srcDataUrl.startsWith('data:image/svg')
+    ) {
+      resolve({
+        blob: null,
+        dataUrl: srcDataUrl,
+        ext: 'webp',
+        mimeType: 'image/webp',
+      });
+      return;
+    }
+    const img = new window.Image();
+    img.onload = () => {
+      try {
+        let targetW = img.naturalWidth || img.width || 800;
+        let targetH = img.naturalHeight || img.height || 1000;
+        if (targetW > maxDimension || targetH > maxDimension) {
+          if (targetW >= targetH) {
+            targetH = Math.round((targetH * maxDimension) / targetW);
+            targetW = maxDimension;
+          } else {
+            targetW = Math.round((targetW * maxDimension) / targetH);
+            targetH = maxDimension;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve({
+            blob: null,
+            dataUrl: srcDataUrl,
+            ext: 'webp',
+            mimeType: 'image/webp',
+          });
+          return;
+        }
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        canvas.toBlob(
+          (webpBlob) => {
+            const finish = (b: Blob | null, ext: 'webp' | 'jpg', mime: string) => {
+              if (!b) {
+                resolve({
+                  blob: null,
+                  dataUrl: srcDataUrl,
+                  ext,
+                  mimeType: mime,
+                });
+                return;
+              }
+              const r = new FileReader();
+              r.onload = () =>
+                resolve({
+                  blob: b,
+                  dataUrl: typeof r.result === 'string' ? r.result : srcDataUrl,
+                  ext,
+                  mimeType: mime,
+                });
+              r.onerror = () =>
+                resolve({
+                  blob: b,
+                  dataUrl: srcDataUrl,
+                  ext,
+                  mimeType: mime,
+                });
+              r.readAsDataURL(b);
+            };
+            if (webpBlob && webpBlob.type === 'image/webp') {
+              finish(webpBlob, 'webp', 'image/webp');
+            } else {
+              canvas.toBlob(
+                (jpgBlob) => finish(jpgBlob, 'jpg', 'image/jpeg'),
+                'image/jpeg',
+                quality
+              );
+            }
+          },
+          'image/webp',
+          quality
+        );
+      } catch {
+        resolve({
+          blob: null,
+          dataUrl: srcDataUrl,
+          ext: 'webp',
+          mimeType: 'image/webp',
+        });
+      }
+    };
+    img.onerror = () =>
+      resolve({
+        blob: null,
+        dataUrl: srcDataUrl,
+        ext: 'webp',
+        mimeType: 'image/webp',
+      });
+    img.src = srcDataUrl;
+  });
+};
+
+const LOOKBOOK_STYLE_PRESETS: {
+  id: LookbookPresetId;
+  title: string;
+  desc: string;
+  badge: string;
+}[] = [
+  {
+    id: 'editorial_street',
+    title: '한남·성수 스트릿 스냅',
+    desc: '35mm 필름 자연광 · 콘크리트 거리 무드',
+    badge: 'DAY 추천',
+  },
+  {
+    id: 'minimal_studio',
+    title: '클린 호리존 스튜디오',
+    desc: '오프화이트 호리존 · 의류 핏·원단 집중',
+    badge: '정밀 핏',
+  },
+  {
+    id: 'underground_flash',
+    title: '언더그라운드 플래시',
+    desc: '야간 직광 플래시 · 다크 아카이브 스냅',
+    badge: 'NIGHT 추천',
+  },
+];
+
+const LOOKBOOK_FIT_TARGETS: { id: LookbookFitTarget; label: string }[] = [
+  { id: 'crop_fit', label: '핀터레스트 크롭 핏' },
+  { id: 'female', label: '여성 모델' },
+  { id: 'male', label: '남성 모델' },
+  { id: 'my_photo', label: '내 사진 피팅' },
+];
+
 const createSvgItem = (
   bgColor: string,
   iconEmoji: string,
@@ -668,6 +826,24 @@ export default function AuraFitClient() {
     null
   );
 
+  // 5단계: 핀터레스트 Style-Lock AI 실사 화보 & 가상 피팅 스튜디오 상태
+  const [lookbookPreset, setLookbookPreset] =
+    useState<LookbookPresetId>('editorial_street');
+  const [lookbookFitTarget, setLookbookFitTarget] =
+    useState<LookbookFitTarget>('crop_fit');
+  const [userTryOnPhoto, setUserTryOnPhoto] = useState<string>('');
+  const [userTryOnInfo, setUserTryOnInfo] = useState<string>('');
+  const [autoShootLookbook, setAutoShootLookbook] = useState<boolean>(true);
+  const [isGeneratingLookbook, setIsGeneratingLookbook] =
+    useState<boolean>(false);
+  const [lookbookViewMode, setLookbookViewMode] = useState<'photo' | 'collage'>(
+    'photo'
+  );
+  const [lookbookStatusHint, setLookbookStatusHint] = useState<string>('');
+  const [lookbookMissingKey, setLookbookMissingKey] = useState<boolean>(false);
+  const [zoomLookbookUrl, setZoomLookbookUrl] = useState<string>('');
+  const [isSavingLookbook, setIsSavingLookbook] = useState<boolean>(false);
+
   // 매거진 모달 & 복귀 배너 상태
   const [magazineModalOpen, setMagazineModalOpen] = useState<boolean>(false);
   const [currentArticle, setCurrentArticle] = useState<Article | null>(null);
@@ -756,6 +932,7 @@ export default function AuraFitClient() {
         const dark = Boolean(JSON.parse(savedTheme));
         setIsDarkMode(dark);
         setSelectedGenre(dark ? '펑크' : '미니멀');
+        setLookbookPreset(dark ? 'underground_flash' : 'editorial_street');
       }
 
       const savedWardrobe = localStorage.getItem(STORAGE_KEYS.WARDROBE);
@@ -892,14 +1069,36 @@ export default function AuraFitClient() {
 
         if (Array.isArray(lRows)) {
           setSavedLooks(
-            lRows.map((r) => ({
-              id: Number(r.id),
-              genre: r.genre,
-              mode: (r.mode as 'DAY' | 'NIGHT') || 'DAY',
-              title: r.title,
-              items: Array.isArray(r.items_json) ? r.items_json : [],
-              note: r.note || '',
-            }))
+            lRows.map((r) => {
+              const rawJson = r.items_json;
+              const parsedItems: ClothItem[] = Array.isArray(rawJson)
+                ? rawJson
+                : Array.isArray(rawJson?.items)
+                ? rawJson.items
+                : [];
+              const parsedCover =
+                !Array.isArray(rawJson) &&
+                typeof rawJson?.lookbookImage === 'string' &&
+                rawJson.lookbookImage
+                  ? rawJson.lookbookImage
+                  : undefined;
+              const parsedPreset =
+                !Array.isArray(rawJson) &&
+                typeof rawJson?.stylePresetLabel === 'string' &&
+                rawJson.stylePresetLabel
+                  ? rawJson.stylePresetLabel
+                  : undefined;
+              return {
+                id: Number(r.id),
+                genre: r.genre,
+                mode: (r.mode as 'DAY' | 'NIGHT') || 'DAY',
+                title: r.title,
+                items: parsedItems,
+                note: r.note || '',
+                lookbookImage: parsedCover,
+                stylePresetLabel: parsedPreset,
+              };
+            })
           );
         }
 
@@ -1234,6 +1433,7 @@ export default function AuraFitClient() {
     const nextDark = !isDarkMode;
     setIsDarkMode(nextDark);
     setSelectedGenre(nextDark ? darkGenres[0].id : lightGenres[0].id);
+    setLookbookPreset(nextDark ? 'underground_flash' : 'editorial_street');
     showToast(
       nextDark
         ? '🌑 NIGHT 모드 전환: 언더그라운드 서브컬처(펑크·고스·로리타) 엔진 활성화'
@@ -1400,6 +1600,8 @@ export default function AuraFitClient() {
       const detailSummary =
         activeDetails.length > 0 ? activeDetails.join(', ') : '기본 디테일';
 
+      setLookbookStatusHint('');
+      setLookbookMissingKey(false);
       setStylistResult({
         id: Date.now(),
         genreTag: `${
@@ -1419,51 +1621,272 @@ export default function AuraFitClient() {
         genre: activeGenre,
       });
       setIsGenerating(false);
+
+      if (autoShootLookbook) {
+        void generateLookbookPhoto(picked, activeGenre);
+      }
     }, 380);
   };
 
-  const handleSaveCurrentLook = async () => {
-    if (!stylistResult) return;
+  const handleUserTryOnPhotoUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImageToWebP(file, 1024, 0.84);
+      setUserTryOnPhoto(compressed.dataUrl);
+      setLookbookFitTarget('my_photo');
+      const compKb = Math.max(1, Math.round(compressed.compressedBytes / 1024));
+      setUserTryOnInfo(
+        `내 피팅 사진 준비 완료 (${compressed.ext.toUpperCase()} · ${compKb}KB)`
+      );
+      showToast('내 전신·거울샷 사진이 가상 피팅 스튜디오에 등록되었습니다!');
+    } catch {
+      showToast('피팅 사진을 불러오지 못했습니다. 다른 사진을 선택해 주세요.');
+    }
+  };
 
-    if (authUser && supabaseClient) {
-      const { data, error } = await supabaseClient
-        .from('saved_looks')
-        .insert({
-          user_id: authUser.id,
-          genre: stylistResult.genre,
-          mode: stylistResult.mode,
-          title: stylistResult.title,
-          items_json: stylistResult.items,
-          note: stylistResult.note,
-        })
-        .select('*')
-        .single();
+  const generateLookbookPhoto = async (
+    overrideItems?: ClothItem[],
+    overrideGenre?: string
+  ) => {
+    const sourceItems = (
+      overrideItems ||
+      stylistResult?.items ||
+      pickedWardrobeItems
+    ).slice(0, 5);
 
-      if (!error && data) {
-        const cloudLook: SavedLook = {
-          id: Number(data.id),
-          genre: data.genre,
-          mode: data.mode as 'DAY' | 'NIGHT',
-          title: data.title,
-          items: stylistResult.items,
-          note: data.note,
-        };
-        setSavedLooks((prev) => [cloudLook, ...prev]);
-        showToast("☁️ 코디가 내 계정 '저장된 룩북' DB에 영구 보관되었습니다!");
-        return;
-      }
+    if (sourceItems.length === 0) {
+      showToast('먼저 화보를 촬영할 의류를 1벌 이상 터치해 선택해 주세요!');
+      return;
     }
 
-    const newLook: SavedLook = {
-      id: Date.now(),
-      genre: stylistResult.genre,
-      mode: stylistResult.mode,
-      title: stylistResult.title,
-      items: stylistResult.items,
-      note: stylistResult.note,
-    };
-    setSavedLooks((prev) => [newLook, ...prev]);
-    showToast("코디가 '저장된 룩북'에 보관되었습니다!");
+    if (lookbookFitTarget === 'my_photo' && !userTryOnPhoto) {
+      showToast(
+        '내 사진 피팅 모드에서는 먼저 내 전신·거울샷 사진을 업로드해 주세요!'
+      );
+      setLookbookStatusHint(
+        '좌측 화보 스튜디오에서 내 전신·거울샷 사진을 업로드한 뒤 다시 촬영 버튼을 눌러주세요.'
+      );
+      return;
+    }
+
+    setIsGeneratingLookbook(true);
+    setLookbookStatusHint('');
+    setLookbookMissingKey(false);
+
+    try {
+      // Vercel 서버리스 4.5MB 요청 한도 초과 방지를 위해 각 참조 이미지를 768px WebP로 경량화
+      const preparedGarments = await Promise.all(
+        sourceItems.map(async (it) => {
+          if (
+            it.image &&
+            it.image.startsWith('data:image/') &&
+            !it.image.startsWith('data:image/svg')
+          ) {
+            const small = await compressDataUrlToWebP(it.image, 768, 0.82);
+            return {
+              name: it.name,
+              category: it.category,
+              status: it.status,
+              image: small.dataUrl,
+            };
+          }
+          return {
+            name: it.name,
+            category: it.category,
+            status: it.status,
+            image: it.image,
+          };
+        })
+      );
+
+      let preparedUserPhoto: string | undefined = undefined;
+      if (lookbookFitTarget === 'my_photo' && userTryOnPhoto) {
+        const smallUser = await compressDataUrlToWebP(
+          userTryOnPhoto,
+          896,
+          0.84
+        );
+        preparedUserPhoto = smallUser.dataUrl;
+      }
+
+      const resp = await fetch('/api/lookbook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          isDarkMode,
+          stylePreset: lookbookPreset,
+          fitTarget: lookbookFitTarget,
+          activeGenre: overrideGenre || stylistResult?.genre || selectedGenre,
+          selectedDetails: activeDetails,
+          garments: preparedGarments,
+          userModelImage: preparedUserPhoto,
+          clientGeminiKey: apiConfig.geminiKey,
+          clientFashnKey: apiConfig.fashnKey,
+        }),
+      });
+
+      const json = await resp.json();
+
+      if (json?.success && typeof json.imageDataUrl === 'string') {
+        const crispWebp = await compressDataUrlToWebP(
+          json.imageDataUrl,
+          1280,
+          0.88
+        );
+        setStylistResult((prev) =>
+          prev
+            ? {
+                ...prev,
+                lookbookImage: crispWebp.dataUrl,
+                lookbookEngine:
+                  json.engineLabel || 'Gemini 2.5 Flash Image · Style-Lock',
+                lookbookPresetLabel: json.presetLabel || '핀터레스트 에디토리얼',
+                apiBadge: '📸 AI 실사 착장 화보 완성',
+              }
+            : prev
+        );
+        setLookbookViewMode('photo');
+        showToast('📸 핀터레스트 무드 AI 실사 착장 화보가 완성되었습니다!');
+      } else if (json?.missingKey) {
+        setLookbookMissingKey(true);
+        setLookbookStatusHint(
+          json.message ||
+            'GEMINI_API_KEY 등록 시 선택한 의류를 착용한 실사 화보가 생성됩니다.'
+        );
+      } else {
+        const errMsg =
+          json?.message || 'AI 화보 촬영 중 일시적인 오류가 발생했습니다.';
+        setLookbookStatusHint(errMsg);
+        showToast(errMsg);
+      }
+    } catch {
+      setLookbookStatusHint(
+        '화보 생성 서버와 통신하지 못했습니다. 잠시 후 다시 촬영 버튼을 눌러주세요.'
+      );
+    } finally {
+      setIsGeneratingLookbook(false);
+    }
+  };
+
+  const downloadLookbookImage = (dataOrHttpUrl: string, title: string) => {
+    try {
+      const a = document.createElement('a');
+      a.href = dataOrHttpUrl;
+      const safeTitle = title
+        .replace(/[^a-zA-Z0-9가-힣_-]/g, '_')
+        .slice(0, 28);
+      a.download = `OBLIQUE_Lookbook_${safeTitle || 'Archive'}.webp`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch {
+      window.open(dataOrHttpUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const handleSaveCurrentLook = async () => {
+    if (!stylistResult || isSavingLookbook) return;
+    setIsSavingLookbook(true);
+
+    try {
+      let persistedCoverUrl: string | undefined = stylistResult.lookbookImage;
+
+      // AI 화보가 생성되어 있고 로그인 상태라면 Supabase Storage(wardrobe-images)에 WebP로 영구 업로드
+      if (
+        stylistResult.lookbookImage &&
+        stylistResult.lookbookImage.startsWith('data:image/')
+      ) {
+        const compressed = await compressDataUrlToWebP(
+          stylistResult.lookbookImage,
+          1150,
+          0.85
+        );
+        persistedCoverUrl = compressed.dataUrl;
+
+        if (authUser && supabaseClient && compressed.blob) {
+          const fileName = `lookbook_${Date.now()}_${Math.random()
+            .toString(36)
+            .slice(2, 7)}.${compressed.ext}`;
+          const storagePath = `${authUser.id}/${fileName}`;
+          const { error: upErr } = await supabaseClient.storage
+            .from(STORAGE_BUCKET)
+            .upload(storagePath, compressed.blob, {
+              contentType: compressed.mimeType,
+              cacheControl: '3600',
+              upsert: false,
+            });
+          if (!upErr) {
+            const { data: pubData } = supabaseClient.storage
+              .from(STORAGE_BUCKET)
+              .getPublicUrl(storagePath);
+            if (pubData?.publicUrl) {
+              persistedCoverUrl = pubData.publicUrl;
+            }
+          }
+        }
+      }
+
+      if (authUser && supabaseClient) {
+        const itemsJsonPayload = persistedCoverUrl
+          ? {
+              items: stylistResult.items,
+              lookbookImage: persistedCoverUrl,
+              stylePresetLabel: stylistResult.lookbookPresetLabel || '',
+            }
+          : stylistResult.items;
+
+        const { data, error } = await supabaseClient
+          .from('saved_looks')
+          .insert({
+            user_id: authUser.id,
+            genre: stylistResult.genre,
+            mode: stylistResult.mode,
+            title: stylistResult.title,
+            items_json: itemsJsonPayload,
+            note: stylistResult.note,
+          })
+          .select('*')
+          .single();
+
+        if (!error && data) {
+          const cloudLook: SavedLook = {
+            id: Number(data.id),
+            genre: data.genre,
+            mode: data.mode as 'DAY' | 'NIGHT',
+            title: data.title,
+            items: stylistResult.items,
+            note: data.note,
+            lookbookImage: persistedCoverUrl,
+            stylePresetLabel: stylistResult.lookbookPresetLabel,
+          };
+          setSavedLooks((prev) => [cloudLook, ...prev]);
+          showToast(
+            persistedCoverUrl
+              ? "☁️ AI 착장 화보와 코디가 '저장된 룩북' 클라우드에 영구 보관되었습니다!"
+              : "☁️ 코디가 내 계정 '저장된 룩북' DB에 영구 보관되었습니다!"
+          );
+          return;
+        }
+      }
+
+      const newLook: SavedLook = {
+        id: Date.now(),
+        genre: stylistResult.genre,
+        mode: stylistResult.mode,
+        title: stylistResult.title,
+        items: stylistResult.items,
+        note: stylistResult.note,
+        lookbookImage: persistedCoverUrl,
+        stylePresetLabel: stylistResult.lookbookPresetLabel,
+      };
+      setSavedLooks((prev) => [newLook, ...prev]);
+      showToast("코디가 '저장된 룩북'에 보관되었습니다!");
+    } finally {
+      setIsSavingLookbook(false);
+    }
   };
 
   const handleDeleteSavedLook = async (lookId: number) => {
@@ -2843,6 +3266,178 @@ export default function AuraFitClient() {
                   )}
                 </div>
 
+                {/* 5단계: 핀터레스트 무드 고정(Style-Lock) & 내 사진 가상 피팅 스튜디오 */}
+                <div
+                  className={`rounded-2xl border p-4 space-y-3.5 transition-colors ${
+                    isDarkMode
+                      ? 'border-rose-900/50 bg-zinc-900/95'
+                      : 'border-zinc-200 bg-white shadow-sm'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Camera className="w-4 h-4 text-rose-500" />
+                      <span className="text-xs font-extrabold">
+                        핀터레스트 Style-Lock 화보 스튜디오
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-500">
+                      STEP 5 AI VTON
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-semibold text-zinc-500">
+                      1. 화보 촬영 무드 고정 (Style-Lock)
+                    </p>
+                    <div className="space-y-1.5">
+                      {LOOKBOOK_STYLE_PRESETS.map((preset) => {
+                        const active = lookbookPreset === preset.id;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => setLookbookPreset(preset.id)}
+                            className={`w-full text-left px-3 py-2 rounded-xl border transition cursor-pointer flex items-center justify-between gap-2 ${
+                              active
+                                ? isDarkMode
+                                  ? 'border-rose-500 bg-rose-950/35 text-white'
+                                  : 'border-zinc-900 bg-zinc-900 text-white'
+                                : isDarkMode
+                                ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-700'
+                                : 'border-zinc-200 bg-zinc-50/70 text-zinc-700 hover:border-zinc-300'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold truncate">
+                                {preset.title}
+                              </p>
+                              <p
+                                className={`text-[10px] truncate ${
+                                  active ? 'opacity-80' : 'text-zinc-400'
+                                }`}
+                              >
+                                {preset.desc}
+                              </p>
+                            </div>
+                            <span
+                              className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                active
+                                  ? 'bg-rose-500 text-white'
+                                  : 'bg-zinc-500/15 text-zinc-500'
+                              }`}
+                            >
+                              {preset.badge}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-semibold text-zinc-500">
+                      2. 착장 모델 · 내 전신 사진 가상 피팅
+                    </p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {LOOKBOOK_FIT_TARGETS.map((t) => {
+                        const active = lookbookFitTarget === t.id;
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => setLookbookFitTarget(t.id)}
+                            className={`py-2 px-2.5 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
+                              active
+                                ? 'border-rose-500 bg-rose-600 text-white'
+                                : isDarkMode
+                                ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-700'
+                                : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'
+                            }`}
+                          >
+                            {t.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {lookbookFitTarget === 'my_photo' && (
+                      <div
+                        className={`mt-2 p-3 rounded-xl border border-dashed space-y-2 ${
+                          isDarkMode
+                            ? 'border-rose-500/50 bg-zinc-950'
+                            : 'border-rose-300 bg-rose-50/40'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold text-rose-500">
+                            내 전신 · 거울샷 사진 등록
+                          </span>
+                          {userTryOnPhoto && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUserTryOnPhoto('');
+                                setUserTryOnInfo('');
+                              }}
+                              className="text-[10px] text-zinc-400 hover:text-rose-500 cursor-pointer"
+                            >
+                              사진 지우기
+                            </button>
+                          )}
+                        </div>
+
+                        {userTryOnPhoto ? (
+                          <div className="flex items-center gap-2.5">
+                            <img
+                              referrerPolicy="no-referrer"
+                              src={userTryOnPhoto}
+                              alt="내 가상 피팅 원본 사진"
+                              className="w-14 h-18 object-cover rounded-lg border border-rose-400 bg-white shrink-0"
+                            />
+                            <div className="min-w-0 space-y-1">
+                              <p className="text-[11px] font-bold text-emerald-500">
+                                ✓ {userTryOnInfo || '가상 피팅 준비 완료'}
+                              </p>
+                              <p className="text-[10px] text-zinc-400 leading-snug">
+                                선택한 내 옷장 아이템들을 위 사진 속 체형·포즈에 맞춰 피팅합니다.
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <label className="flex flex-col items-center justify-center py-3 px-2 rounded-lg bg-white/80 text-zinc-700 border border-zinc-200 hover:border-rose-400 transition cursor-pointer text-center">
+                            <Upload className="w-4 h-4 text-rose-500 mb-1" />
+                            <span className="text-[11px] font-bold">
+                              전신 또는 거울 셀카 업로드 (WebP 자동 경량화)
+                            </span>
+                            <span className="text-[10px] text-zinc-400 mt-0.5">
+                              서버 저장 없이 화보 합성 시에만 일회성으로 사용됩니다
+                            </span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={handleUserTryOnPhotoUpload}
+                              className="hidden"
+                            />
+                          </label>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <label className="flex items-center justify-between gap-2 pt-1 border-t border-zinc-200/40 cursor-pointer select-none">
+                    <span className="text-[11px] font-semibold opacity-85">
+                      코디 생성 시 AI 실사 화보 자동 촬영
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={autoShootLookbook}
+                      onChange={(e) => setAutoShootLookbook(e.target.checked)}
+                      className="w-4 h-4 accent-rose-600 rounded cursor-pointer"
+                    />
+                  </label>
+                </div>
+
                 <button
                   type="button"
                   onClick={() => generateAIOutfit()}
@@ -3055,167 +3650,279 @@ export default function AuraFitClient() {
                         </button>
                         <button
                           type="button"
+                          disabled={isSavingLookbook}
                           onClick={handleSaveCurrentLook}
-                          className="px-3.5 py-2 rounded-xl bg-rose-600 text-white text-xs font-semibold hover:bg-rose-500 transition flex items-center gap-1 cursor-pointer"
+                          className="px-3.5 py-2 rounded-xl bg-rose-600 text-white text-xs font-semibold hover:bg-rose-500 disabled:opacity-60 transition flex items-center gap-1 cursor-pointer"
                         >
-                          <Bookmark className="w-3.5 h-3.5" /> 룩북에 저장
+                          <Bookmark className="w-3.5 h-3.5" />{' '}
+                          {isSavingLookbook ? '클라우드 보관 중...' : '룩북에 저장'}
                         </button>
                       </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-stretch">
                       <div
-                        className={`md:col-span-5 relative rounded-xl overflow-hidden min-h-[340px] border flex flex-col justify-between p-4 ${
+                        className={`md:col-span-5 relative rounded-xl overflow-hidden min-h-[410px] border flex flex-col justify-between p-4 ${
                           isDarkMode
                             ? 'bg-gradient-to-b from-zinc-950 via-zinc-900 to-rose-950/40 border-rose-900/50'
                             : 'bg-gradient-to-b from-stone-100 to-zinc-200/70 border-zinc-200'
                         }`}
                       >
-                        <div className="flex items-center justify-between z-10">
+                        <div className="flex items-center justify-between gap-1.5 z-20">
                           <span className="px-2 py-0.5 rounded bg-black/80 text-white text-[10px] font-semibold backdrop-blur-sm flex items-center gap-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />{' '}
-                            Virtual Try-On 화보
+                            {stylistResult.lookbookImage
+                              ? stylistResult.lookbookPresetLabel || 'AI 착장 화보'
+                              : 'Style-Lock 화보 스튜디오'}
                           </span>
-                          <span className="text-[10px] font-mono text-zinc-600 bg-white/85 px-1.5 py-0.5 rounded">
-                            OBLIQUE #26
-                          </span>
+                          {stylistResult.lookbookImage ? (
+                            <div className="flex items-center gap-1 bg-black/75 backdrop-blur-sm p-0.5 rounded-lg">
+                              <button
+                                type="button"
+                                onClick={() => setLookbookViewMode('photo')}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
+                                  lookbookViewMode === 'photo'
+                                    ? 'bg-white text-zinc-900'
+                                    : 'text-zinc-300 hover:text-white'
+                                }`}
+                              >
+                                실사 화보
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setLookbookViewMode('collage')}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
+                                  lookbookViewMode === 'collage'
+                                    ? 'bg-white text-zinc-900'
+                                    : 'text-zinc-300 hover:text-white'
+                                }`}
+                              >
+                                아이템 배치
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] font-mono text-zinc-600 bg-white/85 px-1.5 py-0.5 rounded">
+                              OBLIQUE STUDIO
+                            </span>
+                          )}
                         </div>
 
-                        {(() => {
-                          const pItems = stylistResult.items;
-                          const topItem =
-                            pItems.find((i) => i.category === '상의') ||
-                            pItems[0];
-                          const outerItem = pItems.find(
-                            (i) => i.category === '아우터'
-                          );
-                          const bottomItem =
-                            pItems.find((i) => i.category === '하의') ||
-                            pItems[1];
-                          const shoeItem = pItems.find(
-                            (i) => i.category === '신발'
-                          );
-                          const accItem = pItems.find(
-                            (i) => i.category === '악세사리'
-                          );
-                          return (
-                            <div className="my-auto relative w-full max-w-[230px] mx-auto py-2 flex flex-col items-center">
-                              <div
-                                className={`w-10 h-10 rounded-full flex items-center justify-center text-[10px] font-editorial italic mb-1 shadow-sm ${
-                                  isDarkMode
-                                    ? 'bg-rose-500/20 border border-rose-500/50 text-rose-300'
-                                    : 'bg-zinc-900 text-white'
-                                }`}
-                              >
-                                {isDarkMode ? 'DARK' : 'LOOK'}
-                              </div>
-                              <div className="flex items-center justify-center -space-x-3 z-10">
-                                {topItem && (
-                                  <div
-                                    className={`w-24 h-24 rounded-2xl overflow-hidden border-2 shadow-md transform -rotate-3 bg-white ${
-                                      isDarkMode
-                                        ? 'border-zinc-700'
-                                        : 'border-white'
-                                    }`}
-                                  >
-                                    <img
-                            referrerPolicy="no-referrer"
-                                      src={topItem.image}
-                                      alt={topItem.name}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </div>
-                                )}
-                                {outerItem &&
-                                  (!topItem || outerItem.id !== topItem.id) && (
-                                    <div
-                                      className={`w-24 h-24 rounded-2xl overflow-hidden border-2 shadow-lg transform rotate-3 z-10 bg-white ${
-                                        isDarkMode
-                                          ? 'border-rose-500/60'
-                                          : 'border-zinc-900'
-                                      }`}
-                                    >
-                                      <img
-                            referrerPolicy="no-referrer"
-                                        src={outerItem.image}
-                                        alt={outerItem.name}
-                                        className="w-full h-full object-cover"
-                                      />
-                                    </div>
-                                  )}
-                              </div>
-                              {bottomItem &&
-                                (!topItem || bottomItem.id !== topItem.id) && (
-                                  <div
-                                    className={`w-24 h-28 rounded-2xl overflow-hidden border-2 shadow-md -mt-2 z-20 bg-white ${
-                                      isDarkMode
-                                        ? 'border-zinc-700'
-                                        : 'border-white'
-                                    }`}
-                                  >
-                                    <img
-                            referrerPolicy="no-referrer"
-                                      src={bottomItem.image}
-                                      alt={bottomItem.name}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </div>
-                                )}
-                              <div className="flex items-center justify-center gap-2 -mt-2 z-30">
-                                {shoeItem && (
-                                  <div
-                                    className={`w-16 h-16 rounded-xl overflow-hidden border-2 shadow-md bg-white ${
-                                      isDarkMode
-                                        ? 'border-zinc-700'
-                                        : 'border-white'
-                                    }`}
-                                  >
-                                    <img
-                            referrerPolicy="no-referrer"
-                                      src={shoeItem.image}
-                                      alt={shoeItem.name}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </div>
-                                )}
-                                {accItem && (
-                                  <div
-                                    className={`w-14 h-14 rounded-xl overflow-hidden border-2 shadow-md bg-white ${
-                                      isDarkMode
-                                        ? 'border-rose-500/50'
-                                        : 'border-zinc-300'
-                                    }`}
-                                  >
-                                    <img
-                            referrerPolicy="no-referrer"
-                                      src={accItem.image}
-                                      alt={accItem.name}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </div>
-                                )}
-                              </div>
-                              <span
-                                className={`mt-2.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
-                                  isDarkMode
-                                    ? 'bg-rose-950 text-rose-300'
-                                    : 'bg-zinc-900 text-white'
-                                }`}
-                              >
-                                {stylistResult.genre} 실루엣 매칭 완료
+                        {isGeneratingLookbook ? (
+                          <div className="my-auto py-10 px-4 text-center flex flex-col items-center justify-center z-10 space-y-3">
+                            <div className="w-11 h-11 border-4 border-rose-500/30 border-t-rose-500 rounded-full animate-spin" />
+                            <div className="space-y-1">
+                              <p className="text-xs font-extrabold">
+                                AI 포토그래퍼가 실사 착장 화보를 현상 중입니다...
+                              </p>
+                              <p className="text-[11px] opacity-75">
+                                선택하신 의류 {stylistResult.items.length}벌의 핏·컬러·디테일을{' '}
+                                {
+                                  LOOKBOOK_STYLE_PRESETS.find(
+                                    (p) => p.id === lookbookPreset
+                                  )?.title
+                                }{' '}
+                                무드로 합성하고 있습니다 (약 8~15초)
+                              </p>
+                            </div>
+                          </div>
+                        ) : stylistResult.lookbookImage &&
+                          lookbookViewMode === 'photo' ? (
+                          <div className="my-2 relative flex-1 flex flex-col justify-between z-10">
+                            <div
+                              onClick={() =>
+                                setZoomLookbookUrl(
+                                  stylistResult.lookbookImage || ''
+                                )
+                              }
+                              title="터치하면 원본 해상도로 크게 확대됩니다"
+                              className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-white/20 shadow-lg bg-zinc-900 cursor-zoom-in group"
+                            >
+                              <img
+                                referrerPolicy="no-referrer"
+                                src={stylistResult.lookbookImage}
+                                alt={stylistResult.title}
+                                className="w-full h-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                              />
+                              <span className="absolute bottom-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[10px] font-semibold backdrop-blur-sm">
+                                터치하여 확대 ⤢
                               </span>
                             </div>
-                          );
-                        })()}
 
-                        <div className="z-10 bg-white/95 backdrop-blur-md rounded-lg p-2.5 text-[11px] text-zinc-700 border border-zinc-200/60">
-                          <p className="font-semibold text-zinc-900">
-                            ✨ 원터치 조합 실루엣 분석
-                          </p>
-                          <p className="text-[10px] text-zinc-500 mt-0.5">
-                            상·하의 기장 밸런스 및 레이어드 톤앤매너 최적화 완료
-                          </p>
-                        </div>
+                            <div className="mt-2.5 flex items-center justify-between gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => generateLookbookPhoto()}
+                                className="flex-1 py-2 px-2.5 rounded-lg bg-black/80 text-white text-[11px] font-bold hover:bg-black transition flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                <RefreshCw className="w-3 h-3" /> 다른 구도 재촬영
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  downloadLookbookImage(
+                                    stylistResult.lookbookImage || '',
+                                    stylistResult.title
+                                  )
+                                }
+                                className="py-2 px-3 rounded-lg bg-white text-zinc-900 border border-zinc-200 text-[11px] font-bold hover:bg-zinc-100 transition flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                <Download className="w-3 h-3" /> 저장
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            {(() => {
+                              const pItems = stylistResult.items;
+                              const topItem =
+                                pItems.find((i) => i.category === '상의') ||
+                                pItems[0];
+                              const outerItem = pItems.find(
+                                (i) => i.category === '아우터'
+                              );
+                              const bottomItem =
+                                pItems.find((i) => i.category === '하의') ||
+                                pItems[1];
+                              const shoeItem = pItems.find(
+                                (i) => i.category === '신발'
+                              );
+                              const accItem = pItems.find(
+                                (i) => i.category === '악세사리'
+                              );
+                              return (
+                                <div className="my-auto relative w-full max-w-[230px] mx-auto py-2 flex flex-col items-center">
+                                  <div
+                                    className={`w-10 h-10 rounded-full flex items-center justify-center text-[10px] font-editorial italic mb-1 shadow-sm ${
+                                      isDarkMode
+                                        ? 'bg-rose-500/20 border border-rose-500/50 text-rose-300'
+                                        : 'bg-zinc-900 text-white'
+                                    }`}
+                                  >
+                                    {isDarkMode ? 'DARK' : 'LOOK'}
+                                  </div>
+                                  <div className="flex items-center justify-center -space-x-3 z-10">
+                                    {topItem && (
+                                      <div
+                                        className={`w-24 h-24 rounded-2xl overflow-hidden border-2 shadow-md transform -rotate-3 bg-white ${
+                                          isDarkMode
+                                            ? 'border-zinc-700'
+                                            : 'border-white'
+                                        }`}
+                                      >
+                                        <img
+                                          referrerPolicy="no-referrer"
+                                          src={topItem.image}
+                                          alt={topItem.name}
+                                          className="w-full h-full object-cover"
+                                        />
+                                      </div>
+                                    )}
+                                    {outerItem &&
+                                      (!topItem ||
+                                        outerItem.id !== topItem.id) && (
+                                        <div
+                                          className={`w-24 h-24 rounded-2xl overflow-hidden border-2 shadow-lg transform rotate-3 z-10 bg-white ${
+                                            isDarkMode
+                                              ? 'border-rose-500/60'
+                                              : 'border-zinc-900'
+                                          }`}
+                                        >
+                                          <img
+                                            referrerPolicy="no-referrer"
+                                            src={outerItem.image}
+                                            alt={outerItem.name}
+                                            className="w-full h-full object-cover"
+                                          />
+                                        </div>
+                                      )}
+                                  </div>
+                                  {bottomItem &&
+                                    (!topItem ||
+                                      bottomItem.id !== topItem.id) && (
+                                      <div
+                                        className={`w-24 h-28 rounded-2xl overflow-hidden border-2 shadow-md -mt-2 z-20 bg-white ${
+                                          isDarkMode
+                                            ? 'border-zinc-700'
+                                            : 'border-white'
+                                        }`}
+                                      >
+                                        <img
+                                          referrerPolicy="no-referrer"
+                                          src={bottomItem.image}
+                                          alt={bottomItem.name}
+                                          className="w-full h-full object-cover"
+                                        />
+                                      </div>
+                                    )}
+                                  <div className="flex items-center justify-center gap-2 -mt-2 z-30">
+                                    {shoeItem && (
+                                      <div
+                                        className={`w-16 h-16 rounded-xl overflow-hidden border-2 shadow-md bg-white ${
+                                          isDarkMode
+                                            ? 'border-zinc-700'
+                                            : 'border-white'
+                                        }`}
+                                      >
+                                        <img
+                                          referrerPolicy="no-referrer"
+                                          src={shoeItem.image}
+                                          alt={shoeItem.name}
+                                          className="w-full h-full object-cover"
+                                        />
+                                      </div>
+                                    )}
+                                    {accItem && (
+                                      <div
+                                        className={`w-14 h-14 rounded-xl overflow-hidden border-2 shadow-md bg-white ${
+                                          isDarkMode
+                                            ? 'border-rose-500/50'
+                                            : 'border-zinc-300'
+                                        }`}
+                                      >
+                                        <img
+                                          referrerPolicy="no-referrer"
+                                          src={accItem.image}
+                                          alt={accItem.name}
+                                          className="w-full h-full object-cover"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
+                            <div className="z-10 space-y-2">
+                              <button
+                                type="button"
+                                onClick={() => generateLookbookPhoto()}
+                                className="w-full py-2.5 px-3 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-500 transition flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
+                              >
+                                <Camera className="w-3.5 h-3.5" /> 핀터레스트 무드 AI 실사 화보 촬영하기
+                              </button>
+
+                              {lookbookStatusHint && (
+                                <div className="bg-white/95 backdrop-blur-md rounded-lg p-2.5 text-[11px] text-zinc-700 border border-zinc-200/80 space-y-1.5">
+                                  <p className="text-[10px] leading-relaxed text-zinc-600">
+                                    {lookbookStatusHint}
+                                  </p>
+                                  {lookbookMissingKey && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setCfgForm(apiConfig);
+                                        setApiModalOpen(true);
+                                      }}
+                                      className="text-[10px] font-extrabold text-rose-600 hover:underline cursor-pointer"
+                                    >
+                                      → [DB · API 설정]에서 Gemini 키 바로 연결하기
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        )}
                       </div>
 
                       <div className="md:col-span-7 flex flex-col justify-between space-y-4">
@@ -3582,10 +4289,29 @@ export default function AuraFitClient() {
                       </button>
                     </div>
                     <h4 className="text-sm font-bold">{look.title}</h4>
+                    {look.lookbookImage && (
+                      <div
+                        onClick={() =>
+                          setZoomLookbookUrl(look.lookbookImage || '')
+                        }
+                        title="터치하면 AI 착장 화보를 크게 확대합니다"
+                        className="relative w-full aspect-[3/4] rounded-xl overflow-hidden border border-zinc-200/40 bg-zinc-900 cursor-zoom-in group"
+                      >
+                        <img
+                          referrerPolicy="no-referrer"
+                          src={look.lookbookImage}
+                          alt={look.title}
+                          className="w-full h-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                        />
+                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/75 text-white text-[10px] font-bold backdrop-blur-sm">
+                          📸 {look.stylePresetLabel || 'AI 착장 화보'}
+                        </span>
+                      </div>
+                    )}
                     <div className="grid grid-cols-3 gap-2">
                       {look.items.slice(0, 3).map((i) => (
                         <img
-                            referrerPolicy="no-referrer"
+                          referrerPolicy="no-referrer"
                           key={i.id}
                           src={i.image}
                           alt={i.name}
@@ -4839,11 +5565,10 @@ export default function AuraFitClient() {
                 </div>
                 <div>
                   <h3 className="text-base font-bold">
-                    2단계 백엔드 DB(Supabase Auth · RLS) & AI API 스튜디오
+                    OBLIQUE 클라우드 DB · Storage & 5단계 AI 화보 API 스튜디오
                   </h3>
                   <p className="text-[11px] text-zinc-400">
-                    Vercel 환경변수를 자동 감지하며, 2단계 정규화 테이블 SQL을
-                    원클릭 복사할 수 있습니다.
+                    Supabase 클라우드 동기화 및 Gemini 2.5 Flash Image 실사 화보·가상 피팅 엔진을 관리합니다.
                   </p>
                 </div>
               </div>
@@ -4953,14 +5678,26 @@ export default function AuraFitClient() {
             </div>
 
             <div className="space-y-3 border-t border-zinc-200 pt-4">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-rose-500" /> AI 스타일링 &
-                가상 피팅 API 키 (선택)
-              </h4>
+              <div className="flex items-center justify-between flex-wrap gap-1">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-rose-500" /> 5단계 AI 실사 화보 & 가상 피팅 API 키
+                </h4>
+                <a
+                  href="https://aistudio.google.com/apikey"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] font-bold text-rose-600 hover:underline flex items-center gap-1"
+                >
+                  Google AI Studio 키 발급받기 <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+              <p className="text-[11px] text-zinc-500 leading-relaxed">
+                Vercel 환경변수에 <code className="px-1 py-0.5 rounded bg-zinc-100 font-mono">GEMINI_API_KEY</code> 하나만 등록하면 AI 코디 노트와 핀터레스트 실사 착장 화보·내 사진 가상 피팅이 모든 기기에서 자동 작동합니다. 배포 전 즉시 테스트하려면 아래 칸에 입력해 보세요.
+              </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-zinc-600 mb-1">
-                    개인 테스트용 Gemini API Key
+                    Gemini API Key (코디 분석 + Style-Lock 실사 화보 통합)
                   </label>
                   <input
                     type="password"
@@ -4968,13 +5705,13 @@ export default function AuraFitClient() {
                     onChange={(e) =>
                       setCfgForm({ ...cfgForm, geminiKey: e.target.value })
                     }
-                    placeholder="Vercel 환경변수 등록 시 비워두세요"
+                    placeholder="AIzaSy... (Vercel GEMINI_API_KEY 등록 시 비워두세요)"
                     className="w-full px-3 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
                   />
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-zinc-600 mb-1">
-                    FASHN AI / Fal.ai API Key
+                    FASHN AI API Key (선택 · 전용 VTON 엔진 연동용)
                   </label>
                   <input
                     type="password"
@@ -4982,7 +5719,7 @@ export default function AuraFitClient() {
                     onChange={(e) =>
                       setCfgForm({ ...cfgForm, fashnKey: e.target.value })
                     }
-                    placeholder="추후 실사 화보 연동 시 사용"
+                    placeholder="선택 사항 (Gemini 키만으로도 내 사진 피팅 지원)"
                     className="w-full px-3 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
                   />
                 </div>
@@ -5014,6 +5751,49 @@ export default function AuraFitClient() {
                 연동 설정 저장 및 적용
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 5: AI 착장 화보 고해상도 확대 뷰어 (Lightbox) */}
+      {zoomLookbookUrl && (
+        <div
+          onClick={() => setZoomLookbookUrl('')}
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-md w-full bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl p-3 space-y-3"
+          >
+            <div className="flex items-center justify-between px-1 text-white">
+              <span className="text-xs font-bold flex items-center gap-1.5">
+                <Camera className="w-3.5 h-3.5 text-rose-500" /> OBLIQUE Style-Lock 화보 뷰어
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadLookbookImage(zoomLookbookUrl, 'OBLIQUE_Editorial')
+                  }
+                  className="px-2.5 py-1 rounded-lg bg-white text-zinc-900 text-[11px] font-bold hover:bg-zinc-200 transition flex items-center gap-1 cursor-pointer"
+                >
+                  <Download className="w-3 h-3" /> 이미지 저장
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setZoomLookbookUrl('')}
+                  className="p-1 rounded-lg bg-zinc-800 text-zinc-300 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <img
+              referrerPolicy="no-referrer"
+              src={zoomLookbookUrl}
+              alt="OBLIQUE AI 착장 화보 확대"
+              className="w-full max-h-[78vh] object-contain rounded-xl bg-black"
+            />
           </div>
         </div>
       )}

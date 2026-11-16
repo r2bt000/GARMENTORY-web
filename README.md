@@ -1,10 +1,9 @@
-# OBLIQUE (AuraFit) — AI 원터치 옷장 & 듀얼 페르소나 스타일링 플랫폼 (Step 3: Supabase Storage & WebP)
+# OBLIQUE — AI 디지털 옷장 & 핀터레스트 Style-Lock 착장 화보 플랫폼 (Step 5 완성본)
 
-[Next.js App Router](https://nextjs.org/docs/app)(보안 패치 `14.2.35`), [Supabase Auth](https://supabase.com/docs/guides/auth)(이메일 · Google · Kakao), [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security), 그리고 3단계 [Supabase Storage](https://supabase.com/docs/guides/storage/buckets/creating-buckets) + 브라우저 WebP 자동 압축 업로드가 적용된 프로덕션 버전입니다.
+[Next.js App Router](https://nextjs.org/docs/app)(`14.2.35`), [Vercel 서울 리전(`icn1`)](https://vercel.com/docs/regions), [Supabase Storage](https://supabase.com/docs/guides/storage/buckets/creating-buckets) WebP 자동 경량화, 4단계 쇼핑몰 링크 실물 이미지 파서(`/api/scrape`), 그리고 5단계 [Gemini 2.5 Flash Image](https://aistudio.google.com/docs/image-generation) 기반 **핀터레스트 무드 고정(Style-Lock) AI 착장 화보 & 내 사진 가상 피팅 스튜디오(`/api/lookbook`)**가 통합된 프로덕션 코드베이스입니다.
 
-## 빠른 시작 및 업데이트 순서
+## 핵심 구성 및 배포 순서
 
-1. **2단계 테이블 생성 (완료된 경우 생략)**: Supabase 프로젝트의 **SQL Editor**에서 `supabase/schema_step2.sql`을 실행합니다.
-2. **3단계 의류 이미지 스토리지 버킷 생성**: Supabase **SQL Editor**에서 `supabase/schema_step3_storage.sql` 전체 내용을 붙여넣고 **Run**을 클릭하면 `wardrobe-images` 버킷과 폴더별 [스토리지 RLS 정책](https://supabase.com/docs/guides/storage/security/access-control)이 한 번에 생성됩니다.
-3. **환경변수 확인**: [Vercel 환경변수](https://vercel.com/docs/environment-variables/managing-environment-variables)에 `NEXT_PUBLIC_SUPABASE_URL`과 `NEXT_PUBLIC_SUPABASE_ANON_KEY`가 등록되어 있으면 별도 추가 환경변수 없이 즉시 클라우드 이미지 스토리지가 작동합니다.
-4. **배포**: 파일들을 GitHub 저장소(`r2bt000/GARMENTORY-web`)에 덮어써서 커밋하면 [Vercel](https://vercel.com/docs/git/vercel-for-github)이 자동으로 최신 버전을 빌드·배포합니다.
+1. **GitHub 덮어쓰기 업로드**: 압축 해제 후 폴더 안의 파일들을 `r2bt000/GARMENTORY-web` 저장소 루트에 업로드하고 `Commit changes`를 클릭하면 [Vercel GitHub 연동](https://vercel.com/docs/git/vercel-for-github)으로 자동 배포됩니다.
+2. **`GEMINI_API_KEY` 등록**: [Google AI Studio API Key 문서](https://aistudio.google.com/docs/api-key) 안내에 따라 발급한 키를 [Vercel Environment Variables](https://vercel.com/docs/environment-variables/managing-environment-variables)에 `GEMINI_API_KEY` 이름으로 추가한 뒤 1회 **Redeploy**하면 AI 코디 노트와 실사 착장 화보·내 사진 가상 피팅이 즉시 활성화됩니다.
+3. **추가 DB 작업 불필요**: 생성된 AI 착장 화보는 기존 3단계 `wardrobe-images` 버킷([Supabase Storage 접근 제어](https://supabase.com/docs/guides/storage/security/access-control))에 WebP로 자동 업로드되며 `saved_looks.items_json`에 영구 기록됩니다.

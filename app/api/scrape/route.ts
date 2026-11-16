@@ -202,11 +202,36 @@ function isGenericOrBadImage(imgUrl: string): boolean {
     return true;
   }
   if (
-    /(og_kream|kream_og|default_og|musinsa_meta|logo|favicon|sprite|apple-touch-icon|meta_default|share_default|common\/og|naver_og|icon_|btn_|badge_)/i.test(
+    /(og_kream|kream_og|default_og|musinsa_meta|logo|favicon|sprite|apple-touch-icon|meta_default|share_default|common\/og|naver_og|icon_|btn_|badge_|_brand\/|\/brand\/|brand_logo|seller_logo)/i.test(
       lower
     )
   ) {
     return true;
+  }
+  // KREAM 소형 브랜드 로고/아이콘 전용 쿼리(?type=s, ?type=s_webp) 배제
+  if (/[?&]type=s(?:_webp)?(?:&|$)/i.test(lower)) {
+    return true;
+  }
+  return false;
+}
+
+function isLikelyBrandLogoAlt(altText: string, titleHint: string): boolean {
+  const cleanAlt = altText.trim();
+  if (!cleanAlt) return false;
+  if (/(로고|logo|brand\s*image|브랜드\s*로고|아이콘)/i.test(cleanAlt)) {
+    return true;
+  }
+  // 예: alt="반스(Vans)" 또는 alt="Vans" 처럼 짧은 단일 브랜드명만 적힌 경우 (상품명은 3단어 이상)
+  if (/^[가-힣a-zA-Z0-9&.\s]{1,14}\([a-zA-Z0-9&.\s]{1,18}\)$/.test(cleanAlt)) {
+    return true;
+  }
+  const altTokens = cleanAlt.split(/\s+/).filter(Boolean);
+  const titleTokens = titleHint.trim().split(/\s+/).filter(Boolean);
+  if (altTokens.length === 1 && cleanAlt.length <= 14 && titleTokens.length >= 3) {
+    // '썸네일' 같은 갤러리 표시는 제외
+    if (!/(썸네일|상품|image|photo)/i.test(cleanAlt)) {
+      return true;
+    }
   }
   return false;
 }
@@ -222,20 +247,41 @@ function scoreProductImage(imgUrl: string, altText = '', titleHint = ''): number
   ) {
     score += 55;
   }
-  // KREAM 공식 상품 스튜디오 컷(a_ 접두어) 최우선 가산점 부여
-  if (/\/a_[0-9a-f]{16,}\.(?:png|jpe?g|webp)/i.test(lower)) {
+  // KREAM 공식 상품 스튜디오 컷: 구형(p_) 및 신형(a_, d_) 접두어 모두 동일 가산점 부여!
+  if (/\/[pad]_[0-9a-f]{16,}\.(?:png|jpe?g|webp)/i.test(lower)) {
     score += 45;
+  }
+  // KREAM 대형·중형 상품 대표 썸네일 쿼리(?type=l, ?type=m) 우대
+  if (/[?&]type=[lm](?:_webp)?(?:&|$)/i.test(lower)) {
+    score += 25;
   }
   if (/(products|goods_img|thumbnails|item|product)/i.test(lower)) {
     score += 20;
   }
-  if (/(banner|event|coupon|review|profile|avatar|social|style)/i.test(lower)) {
-    score -= 30;
+  if (/(banner|event|coupon|review|profile|avatar|social|style|lookbook_user)/i.test(lower)) {
+    score -= 45;
   }
-  if (altText && titleHint) {
-    const firstWord = titleHint.split(/\s+/)[0];
-    if (firstWord && altText.toLowerCase().includes(firstWord.toLowerCase())) {
-      score += 25;
+
+  if (altText) {
+    if (isLikelyBrandLogoAlt(altText, titleHint)) {
+      // 브랜드 소개 박스의 로고 이미지(예: Vans 로고) 강력 감점
+      score -= 95;
+    } else if (titleHint) {
+      const titleWords = titleHint
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((w) => w.length >= 2);
+      const lowerAlt = altText.toLowerCase();
+      let matchedWords = 0;
+      for (let i = 0; i < titleWords.length; i++) {
+        if (lowerAlt.includes(titleWords[i])) {
+          matchedWords += 1;
+        }
+      }
+      // 브랜드 첫 단어 1개만이 아니라 상품명 단어 2개 이상 일치할 때 진짜 상품 사진 가산점 부여
+      if (matchedWords >= 2) {
+        score += 45;
+      }
     }
   }
   return score;
@@ -258,14 +304,14 @@ function inferCategory(text: string): CategoryType {
     return '하의';
   }
   if (
-    /(부츠|로퍼|더비|스니커즈|신발|슈즈|운동화|샌들|왈라비|슬리퍼|뮬|클로그|구두|플랫|힐|포스|조던|덩크|삼바|boots|shoes|sneakers|loafer|sandal|clog|derby)/.test(
+    /(부츠|로퍼|더비|스니커즈|신발|슈즈|운동화|샌들|왈라비|슬리퍼|슬립온|뮬|클로그|구두|플랫|힐|포스|조던|덩크|삼바|slip-on|slipon|boots|shoes|sneakers|loafer|sandal|clog|derby)/.test(
       t
     )
   ) {
     return '신발';
   }
   if (
-    /(볼캡|모자|비니|버킷햇|백|가방|백팩|크로스백|숄더백|토트백|벨트|체인|목걸이|반지|팔찌|귀걸이|안경|선글라스|머플러|스카프|장갑|양말|초커|키링|지갑|cap|hat|beanie|bag|backpack|belt|chain|ring|necklace|glasses|sunglasses|scarf|wallet)/.test(
+    /(볼캡|모자|비니|버킷햇|백|가방|백팩|크로스백|숄더백|토트백|벨트|체인|목걸이|반지|팔찌|귀걸이|안경|선글라스|머플러|스카프|반다나|장갑|양말|초커|키링|지갑|bandana|cap|hat|beanie|bag|backpack|belt|chain|ring|necklace|glasses|sunglasses|scarf|wallet)/.test(
       t
     )
   ) {
@@ -348,7 +394,7 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
     }
   };
 
-  // 1. JSON-LD (Product 스키마 우선 추출)
+  // 1. JSON-LD (Product 스키마 대표 이미지 최우선 추출)
   const ldRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let ldMatch: RegExpExecArray | null;
   while ((ldMatch = ldRegex.exec(html)) !== null) {
@@ -372,7 +418,7 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
             for (let j = 0; j < imgList.length; j++) {
               const entry = imgList[j];
               const u = typeof entry === 'string' ? entry : entry?.url;
-              if (u) pushCandidateImg(u, 40);
+              if (u) pushCandidateImg(u, j === 0 ? 175 : 120);
             }
           }
           if (!price && item.offers) {
@@ -425,6 +471,7 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
     }
   }
 
+  // og:image / twitter:image 는 쇼핑몰이 직접 지정한 공식 대표 썸네일이므로 최상위 가산점(+185) 부여!
   const metaImgCandidates = [
     metaMap.get('og:image:secure_url'),
     metaMap.get('og:image'),
@@ -433,23 +480,28 @@ function parseHtmlMetadata(html: string, pageUrl: string): ExtractedMeta {
   ];
   for (let i = 0; i < metaImgCandidates.length; i++) {
     const cand = metaImgCandidates[i];
-    if (cand) pushCandidateImg(cand, 50);
+    if (cand) pushCandidateImg(cand, 185);
   }
 
-  // 3. <img> 태그 및 Nuxt/Next 내부 고화질 상품 CDN URL 스캔
+  // 3. <img> 태그 스캔 (상단 첫 번째 메인 이미지에 순서 가산점 부여)
   const imgRegex = /<img[^>]+(?:data-src|src)=["']([^"']+)["'][^>]*>/gi;
   let im: RegExpExecArray | null;
+  let imgIndex = 0;
   while ((im = imgRegex.exec(html)) !== null) {
     const altMatch = im[0].match(/alt=["']([^"']*)["']/i);
-    pushCandidateImg(im[1], 0, altMatch?.[1] || '');
+    const positionBonus = imgIndex === 0 ? 35 : imgIndex <= 2 ? 15 : 0;
+    pushCandidateImg(im[1], positionBonus, altMatch?.[1] || '');
+    imgIndex += 1;
   }
 
   const unescapedHtml = html.replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
   const cdnRegex =
     /https?:\/\/(?:kream-phinf\.pstatic\.net|image\.msscdn\.net|img\.29cm\.co\.kr|d3ha2047wt6x28\.cloudfront\.net|cf\.product-image\.s\.zigzag\.kr|shop-phinf\.pstatic\.net|static\.zara\.net)[^"'\s<>\\)]+/gi;
   let cm: RegExpExecArray | null;
+  let cdnIdx = 0;
   while ((cm = cdnRegex.exec(unescapedHtml)) !== null) {
-    pushCandidateImg(cm[0], 10);
+    pushCandidateImg(cm[0], cdnIdx === 0 ? 25 : 5);
+    cdnIdx += 1;
   }
 
   if (!price) {
@@ -502,7 +554,6 @@ async function fetchSingleImageBytes(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    // KREAM 고해상도 원본이 너무 클 경우 빠른 썸네일 쿼리 보조
     let targetImgUrl = imgUrl;
     if (imgUrl.includes('kream-phinf.pstatic.net') && !imgUrl.includes('?')) {
       targetImgUrl = `${imgUrl}?type=m_webp`;
@@ -543,7 +594,6 @@ async function fetchSingleImageBytes(
   }
 }
 
-// 서버에서 후보 이미지 URL들을 직접 다운로드 검증해 깨지지 않는 Data URL(Base64)로 변환!
 async function resolveVerifiedImageDataUrl(
   candidates: { url: string; score: number }[],
   pageUrl: string
@@ -555,7 +605,6 @@ async function resolveVerifiedImageDataUrl(
     refererOrigin = '';
   }
 
-  // 점수 높은 순 정렬 + 중복 URL 제거
   const sorted = candidates.slice().sort((a, b) => b.score - a.score);
   const uniqueUrls: string[] = [];
   for (let i = 0; i < sorted.length; i++) {
@@ -568,12 +617,10 @@ async function resolveVerifiedImageDataUrl(
 
   for (let i = 0; i < uniqueUrls.length; i++) {
     const candidateUrl = uniqueUrls[i];
-    // 1차: 쇼핑몰 Referer 포함 호출 -> 실패 시 2차: Referer 제거 호출
     let fetched = await fetchSingleImageBytes(candidateUrl, refererOrigin, true);
     if (!fetched) {
       fetched = await fetchSingleImageBytes(candidateUrl, refererOrigin, false);
     }
-    // KREAM ?type=m_webp 변환이 거절된 경우 원본 URL 재시도
     if (!fetched && candidateUrl.includes('kream-phinf.pstatic.net')) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4500);
@@ -701,7 +748,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // 2차 전략: Jina Reader 마크다운 + 이미지 요약 조회 (대괄호 포함 alt 텍스트 완벽 호환)
+    // 2차 전략: Jina Reader 마크다운 + 페이지 상단 히어로 영역 우선 파싱
     if (!bestTitle || allImages.length === 0) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 8000);
@@ -723,24 +770,36 @@ export async function POST(request: Request) {
           }
           extraText += ' ' + mdText.slice(0, 1500);
 
-          // 중첩 대괄호([KREAM] 등)가 alt 안에 있어도 끊기지 않는 비탐욕 정규식
+          // 페이지 하단의 '유사 상품 / 스타일 리뷰 / 브랜드 소개 / 함께 본 상품' 섹션 시작 위치 파악
+          const secondarySectionMatch = mdText.match(
+            /\n(?:#+\s*)?(?:유사\s*상품|스타일\s*리뷰|함께\s*본\s*상품|브랜드\s*\n)/
+          );
+          const secondaryCutoffIdx = secondarySectionMatch?.index ?? mdText.length;
+
           const mdImgRegex = /!\[([\s\S]*?)\]\((https?:\/\/[^)\s"']+)\)/g;
           let m: RegExpExecArray | null;
+          let heroCount = 0;
           while ((m = mdImgRegex.exec(mdText)) !== null) {
             const norm = normalizeImageUrl(m[2], cleanUrl);
             if (!norm) continue;
-            const sc = scoreProductImage(norm, m[1], bestTitle);
+            const isHeroZone = m.index < secondaryCutoffIdx;
+            const zoneBonus = isHeroZone ? (heroCount === 0 ? 95 : 40) : -70;
+            if (isHeroZone) heroCount += 1;
+            const sc = scoreProductImage(norm, m[1], bestTitle) + zoneBonus;
             if (sc > 0) allImages.push({ url: norm, score: sc });
           }
 
-          // 마크다운 본문 내 직접 노출된 쇼핑몰 CDN 이미지 URL도 함께 수집
           const rawCdnRegex =
             /https?:\/\/(?:kream-phinf\.pstatic\.net|image\.msscdn\.net|img\.29cm\.co\.kr|d3ha2047wt6x28\.cloudfront\.net|cf\.product-image\.s\.zigzag\.kr|shop-phinf\.pstatic\.net|static\.zara\.net)[^"'\s<>\\)]+/gi;
           let cm: RegExpExecArray | null;
+          let rawIdx = 0;
           while ((cm = rawCdnRegex.exec(mdText)) !== null) {
             const norm = normalizeImageUrl(cm[0], cleanUrl);
             if (!norm) continue;
-            const sc = scoreProductImage(norm, '', bestTitle);
+            const isHeroZone = cm.index < secondaryCutoffIdx;
+            const zoneBonus = isHeroZone ? (rawIdx === 0 ? 60 : 20) : -50;
+            if (isHeroZone) rawIdx += 1;
+            const sc = scoreProductImage(norm, '', bestTitle) + zoneBonus;
             if (sc > 0) allImages.push({ url: norm, score: sc });
           }
         }
@@ -770,7 +829,7 @@ export async function POST(request: Request) {
           if (typeof rawImg === 'string') {
             const norm = normalizeImageUrl(rawImg, cleanUrl);
             if (!isGenericOrBadImage(norm)) {
-              allImages.push({ url: norm, score: 45 });
+              allImages.push({ url: norm, score: 150 });
             }
           }
         }
@@ -781,7 +840,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // 4차 전략: 아직도 이미지가 없거나 제목이 없으면 네이버 통합검색에서 해당 상품명/URL 썸네일 조회
+    // 4차 전략: 네이버 모바일 통합검색에서 해당 상품 URL/상품명 공식 썸네일 조회
     if (!bestTitle || allImages.length === 0) {
       const searchQ = bestTitle ? `${store} ${bestTitle}` : cleanUrl;
       const naverHtml = await fetchHtmlWithUa(
@@ -804,7 +863,7 @@ export async function POST(request: Request) {
         while ((nm = naverThumbRegex.exec(naverHtml)) !== null) {
           const rawFound = decodeHtmlEntities(nm[0]);
           if (!isGenericOrBadImage(rawFound)) {
-            allImages.push({ url: rawFound, score: 35 });
+            allImages.push({ url: rawFound, score: 80 });
           }
         }
       }
