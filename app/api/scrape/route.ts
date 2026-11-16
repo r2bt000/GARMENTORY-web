@@ -289,6 +289,14 @@ function scoreProductImage(imgUrl: string, altText = '', titleHint = ''): number
 
 function inferCategory(text: string): CategoryType {
   const t = text.toLowerCase();
+  // 아이웨어(예: Oakley Eye Jacket 등 'jacket'이 모델명에 들어간 선글라스·고글) 우선 판별!
+  if (
+    /(선글라스|아이웨어|안경|고글|아이\s*자켓|레이싱\s*자켓|스트레이트\s*자켓|eye\s*jacket|racing\s*jacket|straight\s*jacket|sunglasses|eyewear|glasses|goggles)/.test(
+      t
+    )
+  ) {
+    return '악세사리';
+  }
   if (
     /(자켓|재킷|코트|블레이저|패딩|점퍼|가디건|파카|집업|바람막이|아우터|플리스|무스탕|트렌치|블루종|아노락|베스트|조끼|퍼퍼|후디드\s*자켓|jacket|coat|blazer|cardigan|parka|puffer|padding|windbreaker|fleece|outer|vest)/.test(
       t

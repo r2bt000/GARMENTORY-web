@@ -29,6 +29,7 @@ import {
   Upload,
   Cloud,
   Copy,
+  Pencil,
   Trash2,
   CheckCircle2,
   LogIn,
@@ -863,6 +864,16 @@ export default function AuraFitClient() {
   const [photoMime, setPhotoMime] = useState<string>('image/webp');
   const [photoCompressInfo, setPhotoCompressInfo] = useState<string>('');
   const [isUploadingCloth, setIsUploadingCloth] = useState<boolean>(false);
+
+  // 등록된 의류 정보(카테고리·이름·계절·보유상태) 사후 수정 모달 상태
+  const [editingCloth, setEditingCloth] = useState<ClothItem | null>(null);
+  const [editClothName, setEditClothName] = useState<string>('');
+  const [editClothCategory, setEditClothCategory] =
+    useState<CategoryType>('상의');
+  const [editClothSeason, setEditClothSeason] = useState<string>('사계절');
+  const [editClothStatus, setEditClothStatus] =
+    useState<ClothStatus>('보유 중');
+  const [isSavingClothEdit, setIsSavingClothEdit] = useState<boolean>(false);
 
   const [shopUrlInput, setShopUrlInput] = useState<string>('');
   const [isFetchingUrl, setIsFetchingUrl] = useState<boolean>(false);
@@ -2270,6 +2281,77 @@ export default function AuraFitClient() {
     showToast('의류가 옷장에서 삭제되었습니다.');
   };
 
+  const openEditClothModal = (item: ClothItem) => {
+    setEditingCloth(item);
+    setEditClothName(item.name);
+    setEditClothCategory(item.category);
+    setEditClothSeason(item.season || '사계절');
+    setEditClothStatus(item.status || '보유 중');
+  };
+
+  const handleSaveClothEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCloth || isSavingClothEdit) return;
+
+    const cleanName = editClothName.trim() || editingCloth.name;
+    setIsSavingClothEdit(true);
+
+    try {
+      if (authUser && supabaseClient) {
+        const { error } = await supabaseClient
+          .from('wardrobe_items')
+          .update({
+            name: cleanName,
+            category: editClothCategory,
+            season: editClothSeason,
+            status: editClothStatus,
+          })
+          .eq('id', editingCloth.id)
+          .eq('user_id', authUser.id);
+
+        if (error) {
+          showToast(`수정 저장 실패: ${error.message}`);
+          return;
+        }
+      }
+
+      setWardrobe((prev) =>
+        prev.map((w) =>
+          w.id === editingCloth.id
+            ? {
+                ...w,
+                name: cleanName,
+                category: editClothCategory,
+                season: editClothSeason,
+                status: editClothStatus,
+              }
+            : w
+        )
+      );
+
+      // 선택 슬롯에 담겨 있는 상태에서 카테고리를 바꿨을 때 동일 카테고리 중복 충돌 정리
+      setSelectedClothIds((prev) => {
+        if (!prev.includes(editingCloth.id)) return prev;
+        const conflict = wardrobe.find(
+          (w) =>
+            w.id !== editingCloth.id &&
+            prev.includes(w.id) &&
+            w.category === editClothCategory
+        );
+        return conflict ? prev.filter((id) => id !== conflict.id) : prev;
+      });
+
+      setEditingCloth(null);
+      showToast(
+        authUser
+          ? `☁️ '${cleanName}' 카테고리(${editClothCategory}) 및 정보가 클라우드 DB에 수정되었습니다!`
+          : `'${cleanName}' 정보가 '${editClothCategory}'(으)로 수정되었습니다!`
+      );
+    } finally {
+      setIsSavingClothEdit(false);
+    }
+  };
+
   // 프로필 모달 헬퍼
   const openUserProfileModal = (
     userId: string,
@@ -2986,6 +3068,17 @@ export default function AuraFitClient() {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              openEditClothModal(item);
+                            }}
+                            title="카테고리·이름·상태 수정"
+                            className="w-7 h-7 rounded-full bg-black/70 text-white flex items-center justify-center hover:bg-indigo-600 transition cursor-pointer"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
                               deleteCloth(item.id);
                             }}
                             title="삭제"
@@ -3008,9 +3101,18 @@ export default function AuraFitClient() {
                           )}
                         </div>
 
-                        <span className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-black/75 text-white backdrop-blur-sm">
-                          {item.category}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditClothModal(item);
+                          }}
+                          title="클릭하여 카테고리 변경"
+                          className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-black/80 hover:bg-rose-600 text-white backdrop-blur-sm inline-flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <span>{item.category}</span>
+                          <Pencil className="w-2.5 h-2.5 opacity-80" />
+                        </button>
                       </div>
                       <div className="p-3">
                         <p className="text-xs font-bold truncate">{item.name}</p>
@@ -5751,6 +5853,144 @@ export default function AuraFitClient() {
                 연동 설정 저장 및 적용
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 6: 등록된 의류 정보(카테고리·이름·계절·보유상태) 수정 모달 */}
+      {editingCloth && (
+        <div
+          onClick={() => setEditingCloth(null)}
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white text-zinc-900 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold">등록된 의류 정보 수정</h3>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  잘못 분류된 카테고리나 상품명·계절감·보유 상태를 언제든 변경할 수 있습니다.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingCloth(null)}
+                className="p-1.5 rounded-lg hover:bg-zinc-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveClothEdit} className="space-y-4">
+              <div className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 border border-zinc-200/80">
+                <img
+                  referrerPolicy="no-referrer"
+                  src={editingCloth.image}
+                  alt={editingCloth.name}
+                  className="w-16 h-16 rounded-xl object-cover bg-white border border-zinc-200 shrink-0"
+                />
+                <div className="min-w-0 flex-1">
+                  <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-900 text-white">
+                    현재: {editingCloth.category}
+                  </span>
+                  <p className="text-xs font-bold truncate mt-1">
+                    {editingCloth.name}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-700 mb-1.5">
+                  카테고리 변경 (터치하여 선택)
+                </label>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {SLOT_CATEGORIES.map((cat) => {
+                    const active = editClothCategory === cat.key;
+                    return (
+                      <button
+                        key={cat.key}
+                        type="button"
+                        onClick={() => setEditClothCategory(cat.key)}
+                        className={`py-2.5 px-1 rounded-xl border text-center transition cursor-pointer flex flex-col items-center gap-1 ${
+                          active
+                            ? 'border-rose-500 bg-rose-600 text-white font-bold shadow-sm'
+                            : 'border-zinc-200 bg-zinc-50 text-zinc-700 hover:border-zinc-400 font-semibold'
+                        }`}
+                      >
+                        <span className="text-base leading-none">{cat.icon}</span>
+                        <span className="text-[11px]">{cat.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-700 mb-1">
+                  아이템 이름
+                </label>
+                <input
+                  type="text"
+                  value={editClothName}
+                  onChange={(e) => setEditClothName(e.target.value)}
+                  placeholder="의류 이름을 입력하세요"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs font-medium focus:outline-none focus:border-zinc-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-zinc-700 mb-1">
+                    계절감
+                  </label>
+                  <select
+                    value={editClothSeason}
+                    onChange={(e) => setEditClothSeason(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs font-medium focus:outline-none focus:border-zinc-900"
+                  >
+                    <option value="사계절">사계절</option>
+                    <option value="봄/가을">봄/가을</option>
+                    <option value="여름">여름</option>
+                    <option value="겨울">겨울</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-700 mb-1">
+                    등록 상태
+                  </label>
+                  <select
+                    value={editClothStatus}
+                    onChange={(e) =>
+                      setEditClothStatus(e.target.value as ClothStatus)
+                    }
+                    className="w-full px-3 py-2.5 rounded-xl border border-zinc-200 bg-white text-zinc-900 text-xs font-medium focus:outline-none focus:border-zinc-900"
+                  >
+                    <option value="보유 중">✅ 이미 보유 중</option>
+                    <option value="구매 예정">✨ 구매 예정 (위시템)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingCloth(null)}
+                  className="px-4 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold hover:bg-zinc-50 cursor-pointer"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingClothEdit}
+                  className="px-5 py-2.5 rounded-xl bg-zinc-900 text-white text-xs font-bold hover:opacity-90 disabled:opacity-60 cursor-pointer"
+                >
+                  {isSavingClothEdit ? '저장 중...' : '변경 사항 저장하기'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
