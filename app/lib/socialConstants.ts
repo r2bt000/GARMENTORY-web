@@ -172,6 +172,7 @@ export const STORAGE_KEYS = {
   BOOKMARKED_NEWS: '873oc_news_bookmarks_v6',
   NEWS_CACHE: '873oc_news_cache_ko_v7',
   MY_AVATAR: '873oc_my_avatar_v7',
+  WHITE_BG_CACHE: '873oc_white_bg_cache_v1',
 };
 
 export const LEGACY_SAMPLE_ITEM_NAMES = new Set([
@@ -363,13 +364,13 @@ export function formatRelativeTime(iso?: string): string {
   });
 }
 
-// iOS Safari 등 WebP 인코딩 미지원 브라우저에서 JPEG 폴백 시 투명 배경이 검은색(#000000)으로 변하는 현상을 막기 위해
-// 캔버스 바닥에 KREAM 스타일 밝은 스튜디오 톤(#F4F4F5)을 먼저 채운 뒤 이미지를 합성합니다.
+// iOS Safari 등 WebP 인코딩 미지원 브라우저에서 JPEG 폴백 시 투명 배경이 검은색(#000000)으로 변하지 않도록
+// 항상 순백색(#FFFFFF) 배경을 먼저 채운 뒤 합성합니다.
 export async function compressImageToWebP(
   file: File,
   maxEdge = 1280,
   quality = 0.84,
-  bgColor = '#F4F4F5'
+  bgColor = '#FFFFFF'
 ): Promise<{
   blob: Blob;
   dataUrl: string;
@@ -446,7 +447,7 @@ export async function compressDataUrlToWebP(
   srcDataUrl: string,
   maxEdge = 1080,
   quality = 0.84,
-  bgColor = '#F4F4F5'
+  bgColor = '#FFFFFF'
 ): Promise<{
   blob: Blob | null;
   dataUrl: string;

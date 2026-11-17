@@ -11,6 +11,7 @@ import {
   MessageCircle,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Send,
   Sparkles,
@@ -34,6 +35,7 @@ interface ProfileAndClosetProps {
   profileUser: CommunityUser;
   myUserId: string | null;
   isLoggedIn: boolean;
+  isRepairingBlackBg?: boolean;
   userPosts: StylePost[];
   followerUsers: { id: string; handle: string; avatarUrl?: string }[];
   followingUsers: { id: string; handle: string; avatarUrl?: string }[];
@@ -132,6 +134,7 @@ export default function ProfileAndClosetSection({
   profileUser,
   myUserId,
   isLoggedIn,
+  isRepairingBlackBg = false,
   userPosts,
   followerUsers,
   followingUsers,
@@ -824,7 +827,7 @@ export default function ProfileAndClosetSection({
                           referrerPolicy="no-referrer"
                           src={picked.image}
                           alt={picked.name}
-                          className="w-8 h-8 rounded-lg object-cover bg-[#F4F4F5]"
+                          className="w-8 h-8 rounded-lg object-cover bg-white ring-1 ring-black/[0.04]"
                         />
                         <span className="text-xs font-bold text-zinc-900 max-w-[120px] truncate">
                           {picked.name}
@@ -880,11 +883,19 @@ export default function ProfileAndClosetSection({
               })}
             </div>
 
-            {mode === 'my' && (
-              <p className="text-[11px] text-zinc-400">
-                카드를 터치하면 STUDIO 코디 슬롯에 담깁니다
-              </p>
-            )}
+            <div className="flex items-center gap-3">
+              {isRepairingBlackBg && (
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-zinc-500">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  검은 배경 사진 흰색으로 보정 중...
+                </span>
+              )}
+              {mode === 'my' && (
+                <p className="text-[11px] text-zinc-400">
+                  카드를 터치하면 STUDIO 코디 슬롯에 담깁니다
+                </p>
+              )}
+            </div>
           </div>
 
           {filteredCloset.length === 0 ? (
@@ -923,8 +934,8 @@ export default function ProfileAndClosetSection({
                     className="group cursor-pointer space-y-2.5 select-none"
                   >
                     <div
-                      className={`relative aspect-square rounded-2xl overflow-hidden bg-[#F4F4F5] transition ${
-                        isSelected ? 'ring-2 ring-zinc-950' : ''
+                      className={`relative aspect-square rounded-2xl overflow-hidden bg-white ring-1 ring-black/[0.04] transition ${
+                        isSelected ? '!ring-2 !ring-zinc-950' : ''
                       }`}
                     >
                       <img
@@ -1069,7 +1080,7 @@ export default function ProfileAndClosetSection({
                         referrerPolicy="no-referrer"
                         src={it.image}
                         alt={it.name}
-                        className="aspect-square rounded-xl object-cover bg-[#F4F4F5]"
+                        className="aspect-square rounded-xl object-cover bg-white ring-1 ring-black/[0.04]"
                       />
                     ))}
                   </div>
@@ -1170,7 +1181,7 @@ export default function ProfileAndClosetSection({
                               referrerPolicy="no-referrer"
                               src={it.image}
                               alt={it.name}
-                              className="aspect-square rounded-xl object-cover bg-[#F4F4F5]"
+                              className="aspect-square rounded-xl object-cover bg-white ring-1 ring-black/[0.04]"
                             />
                             <p className="text-[10px] font-semibold text-zinc-700 truncate">
                               {it.name}

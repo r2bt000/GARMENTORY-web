@@ -43,6 +43,10 @@ import {
   formatRelativeTime,
   stripWardrobeMetaHash,
 } from './lib/socialConstants';
+import {
+  detectOpaqueBlackBackground,
+  restoreBlackWardrobeItemToWhite,
+} from './lib/whiteBgRepair';
 
 function parseProposalRow(p: Record<string, unknown>): Proposal | null {
   const rawSnap = p.items_snapshot;
@@ -218,6 +222,10 @@ export default function AuraFitClient() {
 
   const [zoomImageUrl, setZoomImageUrl] = useState<string>('');
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [isRepairingMyBg, setIsRepairingMyBg] = useState<boolean>(false);
+  const [isRepairingOtherBg, setIsRepairingOtherBg] = useState<boolean>(false);
+  const checkedBgUrlSetRef = useRef<Set<string>>(new Set());
+  const whiteBgCacheRef = useRef<Record<string, string>>({});
 
   const envSbUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
   const envSbKey = (
@@ -258,6 +266,13 @@ export default function AuraFitClient() {
       if (savedBookmarks) {
         const parsed = JSON.parse(savedBookmarks);
         if (Array.isArray(parsed)) setBookmarkedNewsIds(parsed);
+      }
+      const savedWhiteMap = localStorage.getItem(STORAGE_KEYS.WHITE_BG_CACHE);
+      if (savedWhiteMap) {
+        const parsedMap = JSON.parse(savedWhiteMap);
+        if (parsedMap && typeof parsedMap === 'object') {
+          whiteBgCacheRef.current = parsedMap as Record<string, string>;
+        }
       }
       const savedAvatar = localStorage.getItem(STORAGE_KEYS.MY_AVATAR);
       if (savedAvatar) {
@@ -595,7 +610,9 @@ export default function AuraFitClient() {
                   sourceUrl: meta.cleanUrl,
                   photoSide: meta.photoSide,
                   extraImages: meta.extraImages,
-                  image: w.image_url,
+                  image:
+                    whiteBgCacheRef.current[String(w.image_url || '')] ||
+                    w.image_url,
                 };
               });
 
@@ -755,6 +772,236 @@ export default function AuraFitClient() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [zoomImageUrl]);
+
+  // [자동 복구 1] 내 옷장 기존 검은 배경(#000000) 의류 사진 감지 시 흰색(#FFFFFF) 배경으로 자동 복구 + 클라우드 DB 영구 업데이트
+  useEffect(() => {
+    if (!isHydrated || wardrobe.length === 0) return;
+    const pending = wardrobe.filter(
+      (item) =>
+        item.image &&
+        !item.image.startsWith('data:image/svg') &&
+        !item.image.includes('/white_') &&
+        !checkedBgUrlSetRef.current.has(item.image)
+    );
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    pending.forEach((p) => checkedBgUrlSetRef.current.add(p.image));
+
+    const runMyClosetRepair = async () => {
+      let repairedCount = 0;
+      const concurrency = 2;
+      let cursor = 0;
+
+      const worker = async () => {
+        while (!cancelled && cursor < pending.length) {
+          const item = pending[cursor++];
+          const oldUrl = item.image;
+          const check = await detectOpaqueBlackBackground(
+            oldUrl,
+            item.sourceUrl
+          );
+          if (cancelled || !check.isBlackBg) continue;
+
+          setIsRepairingMyBg(true);
+          const restored = await restoreBlackWardrobeItemToWhite(
+            item,
+            check.blob,
+            1080
+          );
+          if (cancelled || !restored?.dataUrl) continue;
+
+          let finalWhiteUrl = restored.dataUrl;
+          if (authUser && supabaseClient && restored.blob) {
+            const fname = `white_${Date.now()}_${item.id}_${Math.random()
+              .toString(36)
+              .slice(2, 6)}.${restored.ext}`;
+            const storagePath = `${authUser.id}/${fname}`;
+            const { error: upErr } = await supabaseClient.storage
+              .from(STORAGE_BUCKET)
+              .upload(storagePath, restored.blob, {
+                contentType: restored.mimeType,
+                cacheControl: '3600',
+                upsert: false,
+              });
+            if (!upErr) {
+              const { data: pubData } = supabaseClient.storage
+                .from(STORAGE_BUCKET)
+                .getPublicUrl(storagePath);
+              if (pubData?.publicUrl) {
+                finalWhiteUrl = pubData.publicUrl;
+                await supabaseClient
+                  .from('wardrobe_items')
+                  .update({ image_url: finalWhiteUrl })
+                  .eq('id', item.id)
+                  .eq('user_id', authUser.id);
+              }
+            }
+          }
+
+          checkedBgUrlSetRef.current.add(finalWhiteUrl);
+          repairedCount += 1;
+
+          setWardrobe((prev) =>
+            prev.map((w) =>
+              w.id === item.id ? { ...w, image: finalWhiteUrl } : w
+            )
+          );
+          setCommunityUsers((prev) =>
+            prev.map((u) => ({
+              ...u,
+              proposals: u.proposals.map((pr) => ({
+                ...pr,
+                itemsSnapshot: pr.itemsSnapshot?.map((sn) =>
+                  sn.image === oldUrl ? { ...sn, image: finalWhiteUrl } : sn
+                ),
+              })),
+            }))
+          );
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, pending.length) }, () =>
+          worker()
+        )
+      );
+      if (!cancelled) {
+        setIsRepairingMyBg(false);
+        if (repairedCount > 0) {
+          showToast(
+            `검은 배경 의류 ${repairedCount}벌을 흰색 배경으로 자동 변경했습니다.`
+          );
+        }
+      }
+    };
+
+    void runMyClosetRepair();
+    return () => {
+      cancelled = true;
+    };
+  }, [isHydrated, wardrobe, authUser, supabaseClient, showToast]);
+
+  // [자동 복구 2] 타 사용자 옷장 방문 시에도 기존 검은 배경(#000000) 의류를 즉시 흰색(#FFFFFF) 배경으로 자동 변환 & 캐시
+  useEffect(() => {
+    if (!isHydrated || currentTab !== 'user_profile' || !viewingUserId) return;
+    const targetUser = communityUsers.find((u) => u.id === viewingUserId);
+    if (!targetUser || targetUser.closet.length === 0) return;
+
+    const pending = targetUser.closet.filter(
+      (item) =>
+        item.image &&
+        !item.image.startsWith('data:image/svg') &&
+        !item.image.includes('/white_') &&
+        !checkedBgUrlSetRef.current.has(item.image)
+    );
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    pending.forEach((p) => checkedBgUrlSetRef.current.add(p.image));
+
+    const saveCacheEntry = (oldKey: string, whiteDataUrl: string) => {
+      try {
+        const nextMap: Record<string, string> = {
+          ...whiteBgCacheRef.current,
+          [oldKey]: whiteDataUrl,
+        };
+        const keys = Object.keys(nextMap);
+        if (keys.length > 28) {
+          delete nextMap[keys[0]];
+        }
+        whiteBgCacheRef.current = nextMap;
+        localStorage.setItem(
+          STORAGE_KEYS.WHITE_BG_CACHE,
+          JSON.stringify(nextMap)
+        );
+      } catch {
+        // ignore storage quota
+      }
+    };
+
+    const runOtherClosetRepair = async () => {
+      const concurrency = 2;
+      let cursor = 0;
+
+      const worker = async () => {
+        while (!cancelled && cursor < pending.length) {
+          const item = pending[cursor++];
+          const oldUrl = item.image;
+
+          const cachedWhite = whiteBgCacheRef.current[oldUrl];
+          if (cachedWhite) {
+            checkedBgUrlSetRef.current.add(cachedWhite);
+            setCommunityUsers((prev) =>
+              prev.map((u) =>
+                u.id === viewingUserId
+                  ? {
+                      ...u,
+                      closet: u.closet.map((c) =>
+                        c.id === item.id ? { ...c, image: cachedWhite } : c
+                      ),
+                    }
+                  : u
+              )
+            );
+            continue;
+          }
+
+          const check = await detectOpaqueBlackBackground(
+            oldUrl,
+            item.sourceUrl
+          );
+          if (cancelled || !check.isBlackBg) continue;
+
+          setIsRepairingOtherBg(true);
+          const restored = await restoreBlackWardrobeItemToWhite(
+            item,
+            check.blob,
+            560
+          );
+          if (cancelled || !restored?.dataUrl) continue;
+
+          checkedBgUrlSetRef.current.add(restored.dataUrl);
+          saveCacheEntry(oldUrl, restored.dataUrl);
+
+          setCommunityUsers((prev) =>
+            prev.map((u) =>
+              u.id === viewingUserId
+                ? {
+                    ...u,
+                    closet: u.closet.map((c) =>
+                      c.id === item.id ? { ...c, image: restored.dataUrl } : c
+                    ),
+                    proposals: u.proposals.map((pr) => ({
+                      ...pr,
+                      itemsSnapshot: pr.itemsSnapshot?.map((sn) =>
+                        sn.image === oldUrl
+                          ? { ...sn, image: restored.dataUrl }
+                          : sn
+                      ),
+                    })),
+                  }
+                : u
+            )
+          );
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, pending.length) }, () =>
+          worker()
+        )
+      );
+      if (!cancelled) {
+        setIsRepairingOtherBg(false);
+      }
+    };
+
+    void runOtherClosetRepair();
+    return () => {
+      cancelled = true;
+    };
+  }, [isHydrated, currentTab, viewingUserId, communityUsers]);
 
   // 이메일 · 소셜 로그인
   const handleEmailAuth = async (e: React.FormEvent) => {
@@ -2612,6 +2859,7 @@ export default function AuraFitClient() {
             profileUser={myProfileObject}
             myUserId={myUserId}
             isLoggedIn={Boolean(authUser)}
+            isRepairingBlackBg={isRepairingMyBg}
             userPosts={stylePosts.filter((p) =>
               myUserId ? p.userId === myUserId : p.authorHandle === myHandle
             )}
@@ -2653,6 +2901,7 @@ export default function AuraFitClient() {
             profileUser={viewingProfileUser}
             myUserId={myUserId}
             isLoggedIn={Boolean(authUser)}
+            isRepairingBlackBg={isRepairingOtherBg}
             userPosts={stylePosts.filter(
               (p) => p.userId === viewingProfileUser.id
             )}
